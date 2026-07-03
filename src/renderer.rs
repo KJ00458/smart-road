@@ -21,6 +21,10 @@ const VEHICLE_COLORS: [(u8, u8, u8); 8] = [
     (220, 220, 220),
 ];
 
+const HUD_W: u32 = 230;
+const HUD_PAD: i32 = 10;
+const HUD_LINE_H: i32 = 18;
+
 pub struct Renderer<'ttf, 'tc> {
     canvas: Canvas<Window>,
     font: sdl2::ttf::Font<'ttf, 'tc>,
@@ -36,7 +40,7 @@ impl<'ttf, 'tc> Renderer<'ttf, 'tc> {
     ) -> Self {
         let font_path = find_system_font();
         let font = ttf
-            .load_font(&font_path, 15)
+            .load_font(&font_path, 14)
             .expect("Could not load font. Please install a system TTF font.");
         let font_large = ttf
             .load_font(&font_path, 22)
@@ -50,12 +54,8 @@ impl<'ttf, 'tc> Renderer<'ttf, 'tc> {
         }
     }
 
-    pub fn draw_frame(&mut self, intersection: &Intersection) {
-        let c = Color::RGB(
-            GRASS_COLOR.0,
-            GRASS_COLOR.1,
-            GRASS_COLOR.2,
-        );
+    pub fn draw_frame(&mut self, intersection: &Intersection, stats: &Statistics, random_mode: bool) {
+        let c = Color::RGB(GRASS_COLOR.0, GRASS_COLOR.1, GRASS_COLOR.2);
         self.canvas.set_draw_color(c);
         self.canvas.clear();
 
@@ -68,7 +68,83 @@ impl<'ttf, 'tc> Renderer<'ttf, 'tc> {
             self.draw_vehicle(v);
         }
 
+        self.draw_hud(stats, intersection, random_mode);
+
         self.canvas.present();
+    }
+
+    fn draw_hud(&mut self, stats: &Statistics, intersection: &Intersection, random_mode: bool) {
+        let tc = self._texture_creator;
+
+        // --- build lines: (label, value, color) ---
+        let title_col   = Color::RGB(100, 200, 255);
+        let head_col    = Color::RGB(180, 180, 220);
+        let val_col     = Color::RGB(100, 255, 150);
+        let warn_col    = Color::RGB(255, 180, 60);
+        let dim_col     = Color::RGB(140, 140, 160);
+        let white       = Color::RGB(220, 220, 255);
+        let on_col      = Color::RGB(80, 255, 120);
+        let off_col     = Color::RGB(200, 80, 80);
+
+        let active_count = intersection.vehicles.len();
+
+        let lines: Vec<(String, Color)> = vec![
+            ("◈ SMART ROAD".into(),                                      title_col),
+            ("─────────────────────".into(),                             dim_col),
+            // stats
+            (format!("Passed      {:>6}",   stats.max_vehicles),        val_col),
+            (format!("On screen   {:>6}",   active_count),              white),
+            (format!("Close calls {:>6}",   stats.close_calls),
+                if stats.close_calls > 0 { warn_col } else { val_col }),
+            ("─────────────────────".into(),                             dim_col),
+            (format!("Max spd  {:>7.1} px/s", stats.max_velocity),      val_col),
+            (format!("Min spd  {:>7.1} px/s", stats.min_velocity_display()), white),
+            (format!("Avg spd  {:>7.1} px/s", stats.avg_velocity()),    white),
+            ("─────────────────────".into(),                             dim_col),
+            (format!("Max transit {:>5.3}s",  stats.max_time),          val_col),
+            (format!("Min transit {:>5.3}s",  stats.min_time_display()), white),
+            ("─────────────────────".into(),                             dim_col),
+            // controls
+            ("CONTROLS".into(),                                          head_col),
+            (format!("[R] Auto-spawn  {}",
+                if random_mode { "ON " } else { "OFF" }),
+                if random_mode { on_col } else { off_col }),
+            ("[↑↓←→] Spawn car".into(),                                 white),
+            ("[ESC]  Stats & quit".into(),                               dim_col),
+        ];
+
+        // --- measure panel height ---
+        let hud_h = (lines.len() as i32) * HUD_LINE_H + HUD_PAD * 2;
+        let hud_x = WINDOW_W as i32 - HUD_W as i32 - HUD_PAD;
+        let hud_y = HUD_PAD;
+
+        // --- semi-transparent background ---
+        self.canvas.set_draw_color(Color::RGBA(10, 10, 25, 200));
+        self.canvas
+            .fill_rect(Rect::new(hud_x, hud_y, HUD_W, hud_h as u32))
+            .unwrap();
+        // border
+        self.canvas.set_draw_color(Color::RGB(60, 80, 120));
+        self.canvas
+            .draw_rect(Rect::new(hud_x, hud_y, HUD_W, hud_h as u32))
+            .unwrap();
+
+        // --- render each text line ---
+        let mut ty = hud_y + HUD_PAD;
+        let tx = hud_x + HUD_PAD;
+        for (text, color) in &lines {
+            let surface = self
+                .font
+                .render(text)
+                .blended(*color)
+                .unwrap_or_else(|_| self.font.render(" ").blended(*color).unwrap());
+            let texture = tc.create_texture_from_surface(&surface).unwrap();
+            let sdl2::render::TextureQuery { width, height, .. } = texture.query();
+            self.canvas
+                .copy(&texture, None, Some(Rect::new(tx, ty, width, height)))
+                .unwrap();
+            ty += HUD_LINE_H;
+        }
     }
 
     fn draw_roads(&mut self) {
@@ -203,10 +279,7 @@ impl<'ttf, 'tc> Renderer<'ttf, 'tc> {
         let points: Vec<sdl2::rect::Point> = corners
             .iter()
             .map(|(dx, dy)| {
-                sdl2::rect::Point::new(
-                    (v.x + dx) as i32,
-                    (v.y + dy) as i32,
-                )
+                sdl2::rect::Point::new((v.x + dx) as i32, (v.y + dy) as i32)
             })
             .collect();
 
@@ -266,12 +339,10 @@ impl<'ttf, 'tc> Renderer<'ttf, 'tc> {
     pub fn show_statistics(&mut self, stats: &Statistics) {
         let tc = self._texture_creator;
         let mut running = true;
-        let sdl_context = unsafe {
-            sdl2::init().unwrap()
-        };
-        let mut ep = sdl_context.event_pump().unwrap_or_else(|_| {
-            panic!("Cannot get event pump for stats window")
-        });
+        let sdl_context = unsafe { sdl2::init().unwrap() };
+        let mut ep = sdl_context
+            .event_pump()
+            .unwrap_or_else(|_| panic!("Cannot get event pump for stats window"));
 
         loop {
             if !running {
@@ -293,10 +364,12 @@ impl<'ttf, 'tc> Renderer<'ttf, 'tc> {
                 }
             }
 
-            self.canvas
-                .set_draw_color(Color::RGB(STATS_BG_COLOR.0, STATS_BG_COLOR.1, STATS_BG_COLOR.2));
+            self.canvas.set_draw_color(Color::RGB(
+                STATS_BG_COLOR.0,
+                STATS_BG_COLOR.1,
+                STATS_BG_COLOR.2,
+            ));
             self.canvas.clear();
-
             self.draw_stats_panel(stats, tc);
             self.canvas.present();
             std::thread::sleep(std::time::Duration::from_millis(16));
@@ -308,63 +381,23 @@ impl<'ttf, 'tc> Renderer<'ttf, 'tc> {
         stats: &Statistics,
         tc: &'tc TextureCreator<WindowContext>,
     ) {
-        let title_color = Color::RGB(
-            STATS_TITLE_COLOR.0,
-            STATS_TITLE_COLOR.1,
-            STATS_TITLE_COLOR.2,
-        );
-        let text_color = Color::RGB(
-            STATS_TEXT_COLOR.0,
-            STATS_TEXT_COLOR.1,
-            STATS_TEXT_COLOR.2,
-        );
+        let title_color = Color::RGB(STATS_TITLE_COLOR.0, STATS_TITLE_COLOR.1, STATS_TITLE_COLOR.2);
+        let text_color  = Color::RGB(STATS_TEXT_COLOR.0,  STATS_TEXT_COLOR.1,  STATS_TEXT_COLOR.2);
         let accent_color = Color::RGB(100, 255, 150);
-        let warn_color = Color::RGB(255, 180, 60);
+        let warn_color   = Color::RGB(255, 180, 60);
 
         let lines: Vec<(&str, String, Color)> = vec![
-            (
-                "SMART ROAD — SIMULATION STATISTICS",
-                String::new(),
-                title_color,
-            ),
+            ("SMART ROAD — SIMULATION STATISTICS", String::new(), title_color),
             ("─────────────────────────────────────", String::new(), text_color),
-            (
-                "Vehicles passed intersection",
-                format!("{}", stats.max_vehicles),
-                accent_color,
-            ),
-            (
-                "Session duration",
-                format!("{:.1}s", stats.session_duration()),
-                text_color,
-            ),
+            ("Vehicles passed intersection", format!("{}", stats.max_vehicles), accent_color),
+            ("Session duration", format!("{:.1}s", stats.session_duration()), text_color),
             ("─────────────────────────────────────", String::new(), text_color),
-            (
-                "Max velocity",
-                format!("{:.1} px/s", stats.max_velocity),
-                accent_color,
-            ),
-            (
-                "Min velocity",
-                format!("{:.1} px/s", stats.min_velocity_display()),
-                text_color,
-            ),
-            (
-                "Avg velocity",
-                format!("{:.1} px/s", stats.avg_velocity()),
-                text_color,
-            ),
+            ("Max velocity", format!("{:.1} px/s", stats.max_velocity), accent_color),
+            ("Min velocity", format!("{:.1} px/s", stats.min_velocity_display()), text_color),
+            ("Avg velocity", format!("{:.1} px/s", stats.avg_velocity()), text_color),
             ("─────────────────────────────────────", String::new(), text_color),
-            (
-                "Max intersection transit time",
-                format!("{:.3}s", stats.max_time),
-                accent_color,
-            ),
-            (
-                "Min intersection transit time",
-                format!("{:.3}s", stats.min_time_display()),
-                text_color,
-            ),
+            ("Max intersection transit time", format!("{:.3}s", stats.max_time), accent_color),
+            ("Min intersection transit time", format!("{:.3}s", stats.min_time_display()), text_color),
             ("─────────────────────────────────────", String::new(), text_color),
             (
                 "Close calls",
@@ -372,11 +405,7 @@ impl<'ttf, 'tc> Renderer<'ttf, 'tc> {
                 if stats.close_calls > 0 { warn_color } else { accent_color },
             ),
             ("─────────────────────────────────────", String::new(), text_color),
-            (
-                "Press ESC or ENTER to exit",
-                String::new(),
-                Color::RGB(150, 150, 180),
-            ),
+            ("Press ESC or ENTER to exit", String::new(), Color::RGB(150, 150, 180)),
         ];
 
         let mut y = 60i32;
@@ -393,9 +422,7 @@ impl<'ttf, 'tc> Renderer<'ttf, 'tc> {
                 self.font_large
                     .render(&display)
                     .blended(*color)
-                    .unwrap_or_else(|_| {
-                        self.font_large.render(" ").blended(*color).unwrap()
-                    })
+                    .unwrap_or_else(|_| self.font_large.render(" ").blended(*color).unwrap())
             } else {
                 self.font
                     .render(&display)
@@ -406,11 +433,7 @@ impl<'ttf, 'tc> Renderer<'ttf, 'tc> {
             let texture = tc.create_texture_from_surface(&surface).unwrap();
             let sdl2::render::TextureQuery { width, height, .. } = texture.query();
             self.canvas
-                .copy(
-                    &texture,
-                    None,
-                    Some(Rect::new(x, y, width, height)),
-                )
+                .copy(&texture, None, Some(Rect::new(x, y, width, height)))
                 .unwrap();
 
             y += height as i32 + 8;
@@ -437,8 +460,7 @@ fn fill_polygon(canvas: &mut Canvas<Window>, points: &[sdl2::rect::Point]) {
             let p1 = points[i];
             let p2 = points[(i + 1) % n];
             if (p1.y <= y && p2.y > y) || (p2.y <= y && p1.y > y) {
-                let x = p1.x
-                    + (y - p1.y) * (p2.x - p1.x) / (p2.y - p1.y);
+                let x = p1.x + (y - p1.y) * (p2.x - p1.x) / (p2.y - p1.y);
                 intersections.push(x);
             }
         }

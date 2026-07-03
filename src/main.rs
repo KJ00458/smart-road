@@ -6,7 +6,6 @@ mod renderer;
 
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
-use sdl2::pixels::Color;
 use std::time::{Duration, Instant};
 
 use config::*;
@@ -85,9 +84,7 @@ fn main() {
             }
         }
 
-        if random_mode
-            && last_random_spawn.elapsed() >= RANDOM_SPAWN_INTERVAL
-        {
+        if random_mode && last_random_spawn.elapsed() >= RANDOM_SPAWN_INTERVAL {
             if let Some(v) = Vehicle::spawn_random(&intersection) {
                 intersection.add_vehicle(v);
             }
@@ -97,7 +94,8 @@ fn main() {
         let dt = target_frame.as_secs_f64();
         intersection.update(dt, &mut stats);
 
-        renderer.draw_frame(&intersection);
+        // Pass stats and random_mode so the HUD can reflect live state
+        renderer.draw_frame(&intersection, &stats, random_mode);
 
         let elapsed = frame_start.elapsed();
         if elapsed < target_frame {
