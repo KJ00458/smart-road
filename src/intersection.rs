@@ -1,7 +1,12 @@
 use std::time::Instant;
 use crate::config::*;
 use crate::stats::Statistics;
-use crate::vehicle::{Arm, Phase, Turn, Vehicle, paths_conflict};
+use crate::vehicle::{Arm, Phase, Spd, Turn, Vehicle, paths_conflict};
+
+const IX_BOX_L: f64 = IX;
+const IX_BOX_R: f64 = IX + ROAD;
+const IX_BOX_T: f64 = IY;
+const IX_BOX_B: f64 = IY + ROAD;
 
 pub struct World {
     pub vehicles: Vec<Vehicle>,
@@ -12,121 +17,104 @@ impl World {
     pub fn new() -> Self { World { vehicles: Vec::new(), total_passed: 0 } }
 
     pub fn spawn(&mut self, v: Vehicle) {
-        // Don't spawn if too close to another vehicle in same arm+lane
-        for existing in &self.vehicles {
-            if existing.arm == v.arm && existing.turn == v.turn
-                && existing.phase == Phase::Approaching
-            {
-                let dist = (existing.x - v.x).abs() + (existing.y - v.y).abs();
-                if dist < SAFE_DIST * 2.0 { return; }
+        // Reject if spawn point is occupied
+        for e in &self.vehicles {
+            if e.arm == v.arm && e.turn == v.turn {
+                let d = ((e.x-v.x).powi(2)+(e.y-v.y).powi(2)).sqrt();
+                if d < GAP * 2.2 { return; }
             }
         }
         self.vehicles.push(v);
     }
 
     pub fn update(&mut self, dt: f64, stats: &mut Statistics) {
-        // 1. Smart intersection control — set speed targets
-        self.control_speeds();
+        // ── 1. Speed control ────────────────────────────────────────────────
+        // Collect (id, arm, turn, phase, x, y) snapshots for read-only use
+        let snap: Vec<(u64,Arm,Turn,Phase,f64,f64)> = self.vehicles.iter()
+            .map(|v|(v.id,v.arm,v.turn,v.phase,v.x,v.y)).collect();
 
-        // 2. Snapshot positions for safe-distance checks
-        let snaps: Vec<(usize, f64, f64, Arm, Turn, bool)> = self.vehicles.iter()
-            .enumerate()
-            .map(|(i,v)| (i, v.x, v.y, v.arm, v.turn, v.has_turned))
-            .collect();
-
-        // 3. Move each vehicle, checking vehicle-ahead safe distance
         for i in 0..self.vehicles.len() {
-            // Find closest vehicle ahead in same arm+lane+direction-axis
-            let ahead = self.find_ahead(i, &snaps);
-            let v = &mut self.vehicles[i];
+            let spd = self.decide_speed(i, &snap);
+            self.vehicles[i].spd = spd;
+        }
 
-            // Mirror: should_turn -> turning
-            if v.should_turn() && !v.has_turned {
-                v.do_turn();
-            }
+        // ── 2. Move ────────────────────────────────────────────────────────
+        let mut done_ids: Vec<u64> = Vec::new();
+        for v in &mut self.vehicles {
+            let finished = v.step(dt);
 
-            v.update(ahead, dt);
-
-            // Mark entry into intersection box
+            // Phase transitions
             if v.phase == Phase::Approaching && in_box(v.x, v.y) {
                 v.phase = Phase::Crossing;
                 v.entry_t = Some(Instant::now());
             }
-            // Mark exit from intersection box
             if v.phase == Phase::Crossing && !in_box(v.x, v.y) {
                 v.phase = Phase::Exiting;
-                v.exit_t  = Some(Instant::now());
-                if let Some(t) = v.elapsed_secs() { stats.record_time(t); }
+                v.exit_t = Some(Instant::now());
+                if let Some(t) = v.elapsed() { stats.record_time(t); }
                 stats.record_spd(v.max_spd, v.min_spd);
             }
+
+            if finished { done_ids.push(v.id); }
         }
 
-        // 4. Close-call detection
-        stats.close_calls += self.count_close_calls();
-
-        // 5. Remove done vehicles
+        // ── 3. Remove finished ─────────────────────────────────────────────
         self.vehicles.retain(|v| {
-            if v.is_done() {
+            if done_ids.contains(&v.id) {
                 stats.total_passed += 1;
                 stats.max_passed = stats.max_passed.max(stats.total_passed);
                 false
             } else { true }
         });
         self.total_passed = stats.total_passed;
+
+        // ── 4. Close-call detection ────────────────────────────────────────
+        stats.close_calls += self.count_close_calls();
     }
 
-    fn control_speeds(&mut self) {
-        // Collect who is inside or right at the entry of the intersection
-        let holders: Vec<(usize, Arm, Turn)> = self.vehicles.iter()
-            .enumerate()
-            .filter(|(_,v)| {
-                v.phase == Phase::Crossing
-                    || (v.phase == Phase::Approaching && dist_to_entry(v) < SAFE_DIST)
+    fn decide_speed(&self, idx: usize, snap: &[(u64,Arm,Turn,Phase,f64,f64)]) -> Spd {
+        let v = &self.vehicles[idx];
+
+        // ─ Rule 1: vehicle directly ahead on same path ────────────────────────
+        // Find closest vehicle ahead on the same (arm, turn) path
+        let ahead_dist = snap.iter()
+            .filter(|s| s.0 != v.id && s.1 == v.arm && s.2 == v.turn)
+            .map(|s| {
+                // Signed distance along path direction
+                let wp = v.wp.min(v.path.len().saturating_sub(1));
+                let (tx,ty) = v.path[wp];
+                let dir_x = tx - v.x; let dir_y = ty - v.y;
+                let len = (dir_x*dir_x+dir_y*dir_y).sqrt().max(0.001);
+                // dot product: positive means ahead
+                let dot = dir_x*(s.4-v.x)/len + dir_y*(s.5-v.y)/len;
+                if dot > 0.0 {
+                    Some(((s.4-v.x).powi(2)+(s.5-v.y).powi(2)).sqrt())
+                } else { None }
             })
-            .map(|(i,v)| (i, v.arm, v.turn))
-            .collect();
+            .flatten()
+            .fold(f64::MAX, f64::min);
 
-        for i in 0..self.vehicles.len() {
-            let v = &self.vehicles[i];
-            if v.phase != Phase::Approaching { continue; }
-            let d = dist_to_entry(v);
-            let zone = ROAD_W * 0.9;
-            if d > zone {
-                let spd = SPD_NORMAL;
-                self.vehicles[i].set_speed(spd);
-                continue;
-            }
-            let conflict = holders.iter().any(|(j, ha, ht)| {
-                *j != i && paths_conflict(v.arm, v.turn, *ha, *ht)
-            });
-            if conflict {
-                let spd = if d < SAFE_DIST * 1.1 { SPD_STOP } else { SPD_VSLOW };
-                self.vehicles[i].set_speed(spd);
-            } else {
-                let spd = SPD_NORMAL;
-                self.vehicles[i].set_speed(spd);
+        if ahead_dist < STOP_GAP  { return Spd::Slow; }
+        if ahead_dist < GAP       { return Spd::Med;  }
+
+        // ─ Rule 2: intersection conflict ──────────────────────────────────
+        if v.phase == Phase::Approaching {
+            let dist_to_ix = dist_to_entry(v);
+            if dist_to_ix < GAP * 2.5 {
+                // Check if any conflicting vehicle is in or approaching intersection
+                let blocked = snap.iter().any(|s| {
+                    s.0 != v.id
+                        && paths_conflict(v.arm, v.turn, s.1, s.2)
+                        && (s.3 == Phase::Crossing
+                            || (s.3 == Phase::Approaching && dist_to_entry_raw(s.4,s.5,s.1) < GAP))
+                });
+                if blocked {
+                    return if dist_to_ix < STOP_GAP * 2.0 { Spd::Slow } else { Spd::Med };
+                }
             }
         }
-    }
 
-    fn find_ahead(&self, idx: usize, snaps: &[(usize, f64, f64, Arm, Turn, bool)]) -> Option<(f64,f64)> {
-        let vi = &snaps[idx];
-        // Ahead = same arm, same turn (or same exit direction after turn), further along travel axis
-        let mut best_dist = f64::MAX;
-        let mut best: Option<(f64,f64)> = None;
-        let (_, vx, vy, varm, vturn, _) = *vi;
-        for sn in snaps {
-            if sn.0 == idx { continue; }
-            if sn.3 != varm || sn.4 != vturn { continue; }
-            // Is sn ahead of vi in travel direction?
-            let v = &self.vehicles[vi.0];
-            let ahead = v.vx * (sn.1 - vx) + v.vy * (sn.2 - vy);
-            if ahead > 0.0 {
-                let d = (sn.1 - vx).powi(2) + (sn.2 - vy).powi(2);
-                if d < best_dist { best_dist = d; best = Some((sn.1, sn.2)); }
-            }
-        }
-        best
+        Spd::Fast
     }
 
     fn count_close_calls(&self) -> usize {
@@ -134,26 +122,31 @@ impl World {
         let mut c = 0;
         for i in 0..n {
             for j in (i+1)..n {
-                let a = &self.vehicles[i];
-                let b = &self.vehicles[j];
-                if a.arm == b.arm { continue; }
+                let a = &self.vehicles[i]; let b = &self.vehicles[j];
+                if a.arm == b.arm && a.turn == b.turn { continue; }
                 let d = ((a.x-b.x).powi(2)+(a.y-b.y).powi(2)).sqrt();
-                if d < SAFE_DIST * 0.4 && d > 1.0 { c += 1; }
+                if d < VH * 1.2 && d > 1.0 { c += 1; }
             }
         }
         c / 2
     }
 }
 
+// ── Free functions ────────────────────────────────────────────────────────────────
+
 fn in_box(x: f64, y: f64) -> bool {
-    x >= IX && x <= IX + ROAD_W && y >= IY && y <= IY + ROAD_W
+    x >= IX_BOX_L && x <= IX_BOX_R && y >= IX_BOX_T && y <= IX_BOX_B
 }
 
 fn dist_to_entry(v: &Vehicle) -> f64 {
-    match v.arm {
-        Arm::North => (IY - v.y).max(0.0),
-        Arm::South => (v.y - (IY + ROAD_W)).max(0.0),
-        Arm::East  => (v.x - (IX + ROAD_W)).max(0.0),
-        Arm::West  => (IX - v.x).max(0.0),
+    dist_to_entry_raw(v.x, v.y, v.arm)
+}
+
+fn dist_to_entry_raw(x: f64, y: f64, arm: Arm) -> f64 {
+    match arm {
+        Arm::North => (IY - y).max(0.0),
+        Arm::South => (y - (IY + ROAD)).max(0.0),
+        Arm::East  => (x - (IX + ROAD)).max(0.0),
+        Arm::West  => (IX - x).max(0.0),
     }
 }
