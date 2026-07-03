@@ -5,19 +5,21 @@ use std::time::Instant;
 use crate::config::*;
 use crate::intersection::Intersection;
 
+/// Which arm of the intersection the vehicle enters from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Direction {
-    North,
-    South,
-    East,
-    West,
+pub enum Arm {
+    North, // entering from top, moving South
+    South, // entering from bottom, moving North
+    East,  // entering from right, moving West
+    West,  // entering from left, moving East
 }
 
+/// Turn direction — matches reference: West=left, Forward=straight, East=right
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Route {
-    Left,
-    Straight,
-    Right,
+pub enum Turn {
+    West,    // turn left relative to travel direction
+    Forward, // go straight
+    East,    // turn right relative to travel direction
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -25,64 +27,47 @@ pub enum VehicleState {
     Approaching,
     InIntersection,
     Exiting,
-    Done,
 }
 
 #[derive(Debug, Clone)]
 pub struct Vehicle {
     pub id: u64,
-    pub direction: Direction,
-    pub route: Route,
+    pub arm: Arm,
+    pub turn: Turn,
+    pub lane_index: usize, // 0=West lane, 1=Forward lane, 2=East lane
     pub x: f64,
     pub y: f64,
-    pub angle: f64,
+    pub angle: f64,       // radians, for rendering
+    pub exit_arm: Arm,    // which arm it will exit from
     pub velocity: f64,
     pub target_velocity: f64,
     pub state: VehicleState,
-    pub lane_index: usize,
     pub entry_time: Option<Instant>,
     pub exit_time: Option<Instant>,
     pub max_velocity: f64,
     pub min_velocity: f64,
-    pub turn_progress: f64,
-    pub turn_center_x: f64,
-    pub turn_center_y: f64,
-    pub turn_radius: f64,
-    pub turn_start_angle: f64,
-    pub turn_total_angle: f64,
-    pub past_turn_point: bool,
+    pub has_turned: bool,
     pub distance_travelled: f64,
     pub color_index: usize,
+    // After turning, travel direction changes
+    pub dx: f64, // unit direction x
+    pub dy: f64, // unit direction y
+    // Snap-turn destination coordinate
+    pub turn_trigger: f64, // the Y (NS arms) or X (EW arms) at which to snap-turn
 }
 
 static VEHICLE_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 impl Vehicle {
-    pub fn spawn_from_direction(dir: Direction, intersection: &Intersection) -> Option<Vehicle> {
-        let mut rng = rand::thread_rng();
-        let route = random_route(&mut rng);
-        let lane = lane_for_route(route);
-        Self::create(dir, route, lane, intersection)
-    }
+    pub fn new(arm: Arm, turn: Turn, intersection: &Intersection) -> Option<Vehicle> {
+        let lane_index = lane_for_turn(turn);
+        let (x, y, angle, dx, dy) = spawn_position(arm, lane_index);
+        let turn_trigger = turn_trigger_coord(arm, turn, lane_index);
+        let exit_arm = exit_arm_for(arm, turn);
 
-    pub fn spawn_random(intersection: &Intersection) -> Option<Vehicle> {
-        let mut rng = rand::thread_rng();
-        let dir = random_direction(&mut rng);
-        let route = random_route(&mut rng);
-        let lane = lane_for_route(route);
-        Self::create(dir, route, lane, intersection)
-    }
-
-    fn create(
-        dir: Direction,
-        route: Route,
-        lane: usize,
-        intersection: &Intersection,
-    ) -> Option<Vehicle> {
-        let (x, y, angle) = spawn_position(dir, lane);
-
+        // Prevent spawning too close to existing vehicle in same lane
         for v in &intersection.vehicles {
-            if v.direction == dir && v.lane_index == lane {
+            if v.arm == arm && v.lane_index == lane_index && v.state == VehicleState::Approaching {
                 let dist = ((v.x - x).powi(2) + (v.y - y).powi(2)).sqrt();
                 if dist < SAFE_DISTANCE * 1.5 {
                     return None;
@@ -95,29 +80,37 @@ impl Vehicle {
 
         Some(Vehicle {
             id: VEHICLE_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
-            direction: dir,
-            route,
-            x,
-            y,
-            angle,
+            arm,
+            turn,
+            lane_index,
+            x, y, angle,
+            exit_arm,
             velocity: SPEED_HIGH,
             target_velocity: SPEED_HIGH,
             state: VehicleState::Approaching,
-            lane_index: lane,
             entry_time: None,
             exit_time: None,
             max_velocity: SPEED_HIGH,
             min_velocity: SPEED_HIGH,
-            turn_progress: 0.0,
-            turn_center_x: 0.0,
-            turn_center_y: 0.0,
-            turn_radius: 0.0,
-            turn_start_angle: 0.0,
-            turn_total_angle: 0.0,
-            past_turn_point: false,
+            has_turned: false,
             distance_travelled: 0.0,
             color_index,
+            dx, dy,
+            turn_trigger,
         })
+    }
+
+    pub fn spawn_random(intersection: &Intersection) -> Option<Vehicle> {
+        let mut rng = rand::thread_rng();
+        let arm = random_arm(&mut rng);
+        let turn = random_turn(&mut rng);
+        Self::new(arm, turn, intersection)
+    }
+
+    pub fn spawn_from_arm(arm: Arm, intersection: &Intersection) -> Option<Vehicle> {
+        let mut rng = rand::thread_rng();
+        let turn = random_turn(&mut rng);
+        Self::new(arm, turn, intersection)
     }
 
     pub fn update(&mut self, dt: f64) {
@@ -126,153 +119,66 @@ impl Vehicle {
         self.min_velocity = self.min_velocity.min(self.velocity);
         self.distance_travelled += self.velocity * dt;
 
-        match self.state {
-            VehicleState::Approaching => self.move_straight(dt),
-            VehicleState::InIntersection => self.move_in_intersection(dt),
-            VehicleState::Exiting => self.move_straight(dt),
-            VehicleState::Done => {}
-        }
-    }
-
-    fn move_straight(&mut self, dt: f64) {
         let dist = self.velocity * dt;
-        match self.direction {
-            Direction::North => self.y -= dist,
-            Direction::South => self.y += dist,
-            Direction::East => self.x += dist,
-            Direction::West => self.x -= dist,
+        self.x += self.dx * dist;
+        self.y += self.dy * dist;
+
+        // Check snap-turn trigger
+        if self.state == VehicleState::InIntersection && !self.has_turned && self.turn != Turn::Forward {
+            let triggered = match self.arm {
+                Arm::North => self.y >= self.turn_trigger,
+                Arm::South => self.y <= self.turn_trigger,
+                Arm::East  => self.x <= self.turn_trigger,
+                Arm::West  => self.x >= self.turn_trigger,
+            };
+            if triggered {
+                self.snap_turn();
+            }
         }
     }
 
-    fn move_in_intersection(&mut self, dt: f64) {
-        match self.route {
-            Route::Straight => self.move_straight(dt),
-            Route::Right => self.move_turn(dt, true),
-            Route::Left => self.move_turn(dt, false),
+    fn snap_turn(&mut self) {
+        self.has_turned = true;
+        // Snap coordinate to exact turn point then update direction + angle
+        match self.arm {
+            Arm::North => {
+                self.y = self.turn_trigger;
+                match self.turn {
+                    Turn::West => { self.dx = -1.0; self.dy = 0.0; self.angle = PI; self.arm = Arm::East; }
+                    Turn::East => { self.dx =  1.0; self.dy = 0.0; self.angle = 0.0; self.arm = Arm::West; }
+                    Turn::Forward => {}
+                }
+            }
+            Arm::South => {
+                self.y = self.turn_trigger;
+                match self.turn {
+                    Turn::West => { self.dx =  1.0; self.dy = 0.0; self.angle = 0.0; self.arm = Arm::West; }
+                    Turn::East => { self.dx = -1.0; self.dy = 0.0; self.angle = PI; self.arm = Arm::East; }
+                    Turn::Forward => {}
+                }
+            }
+            Arm::East => {
+                self.x = self.turn_trigger;
+                match self.turn {
+                    Turn::West => { self.dx = 0.0; self.dy = -1.0; self.angle = -PI/2.0; self.arm = Arm::South; }
+                    Turn::East => { self.dx = 0.0; self.dy =  1.0; self.angle =  PI/2.0; self.arm = Arm::North; }
+                    Turn::Forward => {}
+                }
+            }
+            Arm::West => {
+                self.x = self.turn_trigger;
+                match self.turn {
+                    Turn::West => { self.dx = 0.0; self.dy =  1.0; self.angle =  PI/2.0; self.arm = Arm::North; }
+                    Turn::East => { self.dx = 0.0; self.dy = -1.0; self.angle = -PI/2.0; self.arm = Arm::South; }
+                    Turn::Forward => {}
+                }
+            }
         }
-    }
-
-    fn move_turn(&mut self, dt: f64, right: bool) {
-        let angular_velocity = self.velocity / self.turn_radius;
-        let delta = if right {
-            angular_velocity * dt
-        } else {
-            -angular_velocity * dt
-        };
-        self.turn_progress += delta.abs();
-
-        let new_angle = self.turn_start_angle + if right { self.turn_progress } else { -self.turn_progress };
-        self.x = self.turn_center_x + self.turn_radius * new_angle.cos();
-        self.y = self.turn_center_y + self.turn_radius * new_angle.sin();
-
-        let tangent = if right { new_angle + PI / 2.0 } else { new_angle - PI / 2.0 };
-        self.angle = tangent;
-
-        if self.turn_progress >= self.turn_total_angle.abs() {
-            self.finish_turn();
-        }
-    }
-
-    fn finish_turn(&mut self) {
         self.state = VehicleState::Exiting;
-        self.past_turn_point = true;
-        match (self.direction, self.route) {
-            (Direction::South, Route::Right) | (Direction::North, Route::Left) => {
-                self.direction = Direction::East;
-                self.angle = 0.0;
-            }
-            (Direction::South, Route::Left) | (Direction::North, Route::Right) => {
-                self.direction = Direction::West;
-                self.angle = PI;
-            }
-            (Direction::East, Route::Right) | (Direction::West, Route::Left) => {
-                self.direction = Direction::South;
-                self.angle = PI / 2.0;
-            }
-            (Direction::East, Route::Left) | (Direction::West, Route::Right) => {
-                self.direction = Direction::North;
-                self.angle = -PI / 2.0;
-            }
-            _ => {}
-        }
-    }
-
-    /// Sets up the arc parameters for a turn using fixed intersection-relative
-    /// anchors instead of the vehicle's live position, avoiding timing drift.
-    pub fn setup_turn(&mut self, ix: f64, iy: f64, iw: f64) {
-        match (self.direction, self.route) {
-            (Direction::South, Route::Right) => {
-                let cx = ix + (self.lane_index as f64 + 0.5) * LANE_WIDTH;
-                let turn_x = ix + iw;
-                let radius = (turn_x - cx).abs().max(1.0);
-                self.turn_center_x = turn_x;
-                self.turn_center_y = iy;  // fixed intersection top edge
-                self.turn_radius = radius;
-                self.turn_start_angle = PI;
-                self.turn_total_angle = PI / 2.0;
-            }
-            (Direction::South, Route::Left) => {
-                let radius = LANE_WIDTH * 1.5;
-                self.turn_center_x = ix;
-                self.turn_center_y = iy;  // fixed intersection top edge
-                self.turn_radius = radius;
-                self.turn_start_angle = 0.0;
-                self.turn_total_angle = PI / 2.0;
-            }
-            (Direction::North, Route::Right) => {
-                let radius = LANE_WIDTH * 1.5;
-                self.turn_center_x = ix + iw;
-                self.turn_center_y = iy + iw;  // fixed intersection bottom edge
-                self.turn_radius = radius;
-                self.turn_start_angle = PI;
-                self.turn_total_angle = PI / 2.0;
-            }
-            (Direction::North, Route::Left) => {
-                let radius = LANE_WIDTH * 1.5;
-                self.turn_center_x = ix;
-                self.turn_center_y = iy + iw;  // fixed intersection bottom edge
-                self.turn_radius = radius;
-                self.turn_start_angle = 0.0;
-                self.turn_total_angle = PI / 2.0;
-            }
-            (Direction::East, Route::Right) => {
-                let radius = LANE_WIDTH * 1.5;
-                self.turn_center_x = ix;  // fixed intersection left edge
-                self.turn_center_y = iy + iw;
-                self.turn_radius = radius;
-                self.turn_start_angle = -PI / 2.0;
-                self.turn_total_angle = PI / 2.0;
-            }
-            (Direction::East, Route::Left) => {
-                let radius = LANE_WIDTH * 1.5;
-                self.turn_center_x = ix;  // fixed intersection left edge
-                self.turn_center_y = iy;
-                self.turn_radius = radius;
-                self.turn_start_angle = PI / 2.0;
-                self.turn_total_angle = PI / 2.0;
-            }
-            (Direction::West, Route::Right) => {
-                let radius = LANE_WIDTH * 1.5;
-                self.turn_center_x = ix + iw;  // fixed intersection right edge
-                self.turn_center_y = iy;
-                self.turn_radius = radius;
-                self.turn_start_angle = PI / 2.0;
-                self.turn_total_angle = PI / 2.0;
-            }
-            (Direction::West, Route::Left) => {
-                let radius = LANE_WIDTH * 1.5;
-                self.turn_center_x = ix + iw;  // fixed intersection right edge
-                self.turn_center_y = iy + iw;
-                self.turn_radius = radius;
-                self.turn_start_angle = -PI / 2.0;
-                self.turn_total_angle = PI / 2.0;
-            }
-            _ => {}
-        }
     }
 
     pub fn is_out_of_bounds(&self) -> bool {
-        let margin = VEHICLE_H * 2.0;
+        let margin = VEHICLE_H * 3.0;
         self.x < -margin
             || self.x > WINDOW_W as f64 + margin
             || self.y < -margin
@@ -287,6 +193,94 @@ impl Vehicle {
     }
 }
 
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+/// Lane index: 0=West(left turn), 1=Forward, 2=East(right turn)
+pub fn lane_for_turn(turn: Turn) -> usize {
+    match turn {
+        Turn::West    => 0,
+        Turn::Forward => 1,
+        Turn::East    => 2,
+    }
+}
+
+/// The outbound arm a vehicle exits on.
+fn exit_arm_for(arm: Arm, turn: Turn) -> Arm {
+    match (arm, turn) {
+        (Arm::North, Turn::Forward) => Arm::North,
+        (Arm::North, Turn::West)    => Arm::West,
+        (Arm::North, Turn::East)    => Arm::East,
+        (Arm::South, Turn::Forward) => Arm::South,
+        (Arm::South, Turn::West)    => Arm::East,
+        (Arm::South, Turn::East)    => Arm::West,
+        (Arm::East,  Turn::Forward) => Arm::East,
+        (Arm::East,  Turn::West)    => Arm::North,
+        (Arm::East,  Turn::East)    => Arm::South,
+        (Arm::West,  Turn::Forward) => Arm::West,
+        (Arm::West,  Turn::West)    => Arm::South,
+        (Arm::West,  Turn::East)    => Arm::North,
+    }
+}
+
+/// Spawn position + initial direction vector + angle.
+/// Inbound lanes occupy the inner 3 lanes (closer to center line).
+pub fn spawn_position(arm: Arm, lane: usize) -> (f64, f64, f64, f64, f64) {
+    let ix = INTERSECTION_X;
+    let iy = INTERSECTION_Y;
+    let iw = ROAD_WIDTH;
+    let lw = LANE_WIDTH;
+    let off = SPAWN_OFFSET;
+
+    match arm {
+        Arm::North => {
+            // Moving South (dy=+1). Inbound = left half of vertical strip (lower X)
+            let lx = ix + (lane as f64 + 0.5) * lw;
+            (lx, iy - off, PI / 2.0, 0.0, 1.0)
+        }
+        Arm::South => {
+            // Moving North (dy=-1). Inbound = right half (higher X)
+            let lx = ix + iw - (lane as f64 + 0.5) * lw;
+            (lx, iy + iw + off, -PI / 2.0, 0.0, -1.0)
+        }
+        Arm::East => {
+            // Moving West (dx=-1). Inbound = top half of horizontal strip (lower Y)
+            let ly = iy + (lane as f64 + 0.5) * lw;
+            (ix + iw + off, ly, PI, -1.0, 0.0)
+        }
+        Arm::West => {
+            // Moving East (dx=+1). Inbound = bottom half (higher Y)
+            let ly = iy + iw - (lane as f64 + 0.5) * lw;
+            (-off, ly, 0.0, 1.0, 0.0)
+        }
+    }
+}
+
+/// The Y coordinate (for N/S arms) or X coordinate (for E/W arms) at which
+/// the vehicle snaps its direction — derived from the reference destination logic.
+fn turn_trigger_coord(arm: Arm, turn: Turn, _lane: usize) -> f64 {
+    let ix = INTERSECTION_X;
+    let iy = INTERSECTION_Y;
+    let iw = ROAD_WIDTH;
+    let lw = LANE_WIDTH;
+
+    match (arm, turn) {
+        // North arm (moving South)
+        (Arm::North, Turn::East)  => iy + lw * 3.0, // right turn: early
+        (Arm::North, Turn::West)  => iy + lw * 5.0, // left turn: deep
+        // South arm (moving North)
+        (Arm::South, Turn::East)  => iy + iw - lw * 3.0,
+        (Arm::South, Turn::West)  => iy + iw - lw * 5.0,
+        // East arm (moving West)
+        (Arm::East,  Turn::East)  => ix + iw - lw * 3.0,
+        (Arm::East,  Turn::West)  => ix + iw - lw * 5.0,
+        // West arm (moving East)
+        (Arm::West,  Turn::East)  => ix + lw * 3.0,
+        (Arm::West,  Turn::West)  => ix + lw * 5.0,
+        // Forward: unused
+        _ => 0.0,
+    }
+}
+
 fn approach_velocity(current: f64, target: f64, dt: f64) -> f64 {
     if current < target {
         (current + ACCEL * dt).min(target)
@@ -297,53 +291,19 @@ fn approach_velocity(current: f64, target: f64, dt: f64) -> f64 {
     }
 }
 
-pub fn lane_for_route(route: Route) -> usize {
-    match route {
-        Route::Right => 0,
-        Route::Straight => 1,
-        Route::Left => 2,
-    }
-}
-
-pub fn spawn_position(dir: Direction, lane: usize) -> (f64, f64, f64) {
-    let ix = INTERSECTION_X;
-    let iy = INTERSECTION_Y;
-    let iw = ROAD_WIDTH;
-    let offset = WINDOW_H as f64 * 0.15;
-
-    match dir {
-        Direction::South => {
-            let lx = ix + (lane as f64 + 0.5) * LANE_WIDTH;
-            (lx, WINDOW_H as f64 + offset, -PI / 2.0)
-        }
-        Direction::North => {
-            let lx = ix + iw - (lane as f64 + 0.5) * LANE_WIDTH;
-            (lx, -offset, PI / 2.0)
-        }
-        Direction::East => {
-            let ly = iy + (lane as f64 + 0.5) * LANE_WIDTH;
-            (-offset, ly, 0.0)
-        }
-        Direction::West => {
-            let ly = iy + iw - (lane as f64 + 0.5) * LANE_WIDTH;
-            (WINDOW_W as f64 + offset, ly, PI)
-        }
-    }
-}
-
-fn random_direction(rng: &mut impl Rng) -> Direction {
+fn random_arm(rng: &mut impl Rng) -> Arm {
     match rng.gen_range(0..4) {
-        0 => Direction::North,
-        1 => Direction::South,
-        2 => Direction::East,
-        _ => Direction::West,
+        0 => Arm::North,
+        1 => Arm::South,
+        2 => Arm::East,
+        _ => Arm::West,
     }
 }
 
-fn random_route(rng: &mut impl Rng) -> Route {
+fn random_turn(rng: &mut impl Rng) -> Turn {
     match rng.gen_range(0..3) {
-        0 => Route::Right,
-        1 => Route::Straight,
-        _ => Route::Left,
+        0 => Turn::West,
+        1 => Turn::Forward,
+        _ => Turn::East,
     }
 }

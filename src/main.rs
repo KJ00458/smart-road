@@ -12,7 +12,7 @@ use config::*;
 use intersection::Intersection;
 use renderer::Renderer;
 use stats::Statistics;
-use vehicle::{Direction, Vehicle};
+use vehicle::{Arm, Vehicle};
 
 fn main() {
     let sdl = sdl2::init().expect("SDL2 init failed");
@@ -71,8 +71,8 @@ fn main() {
                             .map(|t| now.duration_since(*t) >= KEY_COOLDOWN)
                             .unwrap_or(true);
                         if ready {
-                            let dir = direction_from_keycode(kc);
-                            if let Some(v) = Vehicle::spawn_from_direction(dir, &intersection) {
+                            let arm = arm_from_keycode(kc);
+                            if let Some(v) = Vehicle::spawn_from_arm(arm, &intersection) {
                                 intersection.add_vehicle(v);
                             }
                             key_spawn_cooldown.insert(kc, now);
@@ -93,8 +93,6 @@ fn main() {
 
         let dt = target_frame.as_secs_f64();
         intersection.update(dt, &mut stats);
-
-        // Pass stats and random_mode so the HUD can reflect live state
         renderer.draw_frame(&intersection, &stats, random_mode);
 
         let elapsed = frame_start.elapsed();
@@ -104,12 +102,12 @@ fn main() {
     }
 }
 
-fn direction_from_keycode(kc: Keycode) -> Direction {
+fn arm_from_keycode(kc: Keycode) -> Arm {
     match kc {
-        Keycode::Up => Direction::South,
-        Keycode::Down => Direction::North,
-        Keycode::Right => Direction::West,
-        Keycode::Left => Direction::East,
+        Keycode::Up    => Arm::North,
+        Keycode::Down  => Arm::South,
+        Keycode::Right => Arm::East,
+        Keycode::Left  => Arm::West,
         _ => unreachable!(),
     }
 }
