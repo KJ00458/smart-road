@@ -47,10 +47,15 @@ impl Intersection {
         let iw = ROAD_WIDTH;
         let approach_zone = iw * 0.8;
 
+        // Include vehicles already in the intersection AND those very close to entry
         let reservation_holders: Vec<(u64, Direction, Route, usize)> = self
             .vehicles
             .iter()
-            .filter(|v| v.state == VehicleState::InIntersection)
+            .filter(|v| {
+                v.state == VehicleState::InIntersection
+                    || (v.state == VehicleState::Approaching
+                        && distance_to_intersection_entry(v, ix, iy, iw) < SAFE_DISTANCE)
+            })
             .map(|v| (v.id, v.direction, v.route, v.lane_index))
             .collect();
 
@@ -83,35 +88,6 @@ impl Intersection {
     }
 
     fn apply_safe_distance(&mut self) {
-        let count = self.vehicles.len();
-        for i in 0..count {
-            for j in 0..count {
-                if i == j {
-                    continue;
-                }
-                let (ahead, behind) = if self.vehicles[i].id > self.vehicles[j].id {
-                    let (a, b) = self.vehicles.split_at_mut(i);
-                    (&b[0], &a[j])
-                } else {
-                    let (a, b) = self.vehicles.split_at_mut(j);
-                    (&a[i], &b[0])
-                };
-
-                if ahead.direction != behind.direction {
-                    continue;
-                }
-                if ahead.lane_index != behind.lane_index
-                    && ahead.state != VehicleState::InIntersection
-                    && behind.state != VehicleState::InIntersection
-                {
-                    continue;
-                }
-
-                let dist = ((ahead.x - behind.x).powi(2) + (ahead.y - behind.y).powi(2)).sqrt();
-                let _ = (dist, ahead, behind);
-            }
-        }
-
         let snapshots: Vec<(usize, f64, f64, Direction, usize, VehicleState)> = self
             .vehicles
             .iter()
@@ -137,6 +113,7 @@ impl Intersection {
                     continue;
                 }
 
+                // vj is "ahead" of vi if vj is further along vi's direction of travel
                 let is_ahead = match vi.3 {
                     Direction::South => vj.2 < vi.2,
                     Direction::North => vj.2 > vi.2,
@@ -176,7 +153,7 @@ impl Intersection {
                 v.state = VehicleState::InIntersection;
                 v.entry_time = Some(Instant::now());
                 if v.route != Route::Straight {
-                    v.setup_turn();
+                    v.setup_turn(ix, iy, iw);
                 }
                 v.target_velocity = SPEED_MED;
             }
@@ -290,10 +267,16 @@ pub fn paths_conflict(d1: Direction, r1: Route, d2: Direction, r2: Route) -> boo
     );
 
     if perpendicular {
+        // A right turn never conflicts
         if r1 == Right {
             return false;
         }
+        // Oncoming right turn vs our straight: no conflict
         if r2 == Right && r1 == Straight {
+            return false;
+        }
+        // Two left turns from perpendicular directions: arcs cross opposite corners, no conflict
+        if r1 == Left && r2 == Left {
             return false;
         }
         return true;

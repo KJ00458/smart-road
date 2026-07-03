@@ -197,19 +197,16 @@ impl Vehicle {
         }
     }
 
-    pub fn setup_turn(&mut self) {
-        let ix = INTERSECTION_X;
-        let iy = INTERSECTION_Y;
-        let iw = ROAD_WIDTH;
-
+    /// Sets up the arc parameters for a turn using fixed intersection-relative
+    /// anchors instead of the vehicle's live position, avoiding timing drift.
+    pub fn setup_turn(&mut self, ix: f64, iy: f64, iw: f64) {
         match (self.direction, self.route) {
             (Direction::South, Route::Right) => {
                 let cx = ix + (self.lane_index as f64 + 0.5) * LANE_WIDTH;
                 let turn_x = ix + iw;
                 let radius = (turn_x - cx).abs().max(1.0);
-                let cy = self.y;
                 self.turn_center_x = turn_x;
-                self.turn_center_y = cy;
+                self.turn_center_y = iy;  // fixed intersection top edge
                 self.turn_radius = radius;
                 self.turn_start_angle = PI;
                 self.turn_total_angle = PI / 2.0;
@@ -217,7 +214,7 @@ impl Vehicle {
             (Direction::South, Route::Left) => {
                 let radius = LANE_WIDTH * 1.5;
                 self.turn_center_x = ix;
-                self.turn_center_y = self.y;
+                self.turn_center_y = iy;  // fixed intersection top edge
                 self.turn_radius = radius;
                 self.turn_start_angle = 0.0;
                 self.turn_total_angle = PI / 2.0;
@@ -225,7 +222,7 @@ impl Vehicle {
             (Direction::North, Route::Right) => {
                 let radius = LANE_WIDTH * 1.5;
                 self.turn_center_x = ix + iw;
-                self.turn_center_y = self.y;
+                self.turn_center_y = iy + iw;  // fixed intersection bottom edge
                 self.turn_radius = radius;
                 self.turn_start_angle = PI;
                 self.turn_total_angle = PI / 2.0;
@@ -233,14 +230,14 @@ impl Vehicle {
             (Direction::North, Route::Left) => {
                 let radius = LANE_WIDTH * 1.5;
                 self.turn_center_x = ix;
-                self.turn_center_y = self.y;
+                self.turn_center_y = iy + iw;  // fixed intersection bottom edge
                 self.turn_radius = radius;
                 self.turn_start_angle = 0.0;
                 self.turn_total_angle = PI / 2.0;
             }
             (Direction::East, Route::Right) => {
                 let radius = LANE_WIDTH * 1.5;
-                self.turn_center_x = self.x;
+                self.turn_center_x = ix;  // fixed intersection left edge
                 self.turn_center_y = iy + iw;
                 self.turn_radius = radius;
                 self.turn_start_angle = -PI / 2.0;
@@ -248,7 +245,7 @@ impl Vehicle {
             }
             (Direction::East, Route::Left) => {
                 let radius = LANE_WIDTH * 1.5;
-                self.turn_center_x = self.x;
+                self.turn_center_x = ix;  // fixed intersection left edge
                 self.turn_center_y = iy;
                 self.turn_radius = radius;
                 self.turn_start_angle = PI / 2.0;
@@ -256,7 +253,7 @@ impl Vehicle {
             }
             (Direction::West, Route::Right) => {
                 let radius = LANE_WIDTH * 1.5;
-                self.turn_center_x = self.x;
+                self.turn_center_x = ix + iw;  // fixed intersection right edge
                 self.turn_center_y = iy;
                 self.turn_radius = radius;
                 self.turn_start_angle = PI / 2.0;
@@ -264,7 +261,7 @@ impl Vehicle {
             }
             (Direction::West, Route::Left) => {
                 let radius = LANE_WIDTH * 1.5;
-                self.turn_center_x = self.x;
+                self.turn_center_x = ix + iw;  // fixed intersection right edge
                 self.turn_center_y = iy + iw;
                 self.turn_radius = radius;
                 self.turn_start_angle = -PI / 2.0;
