@@ -1,74 +1,59 @@
 use std::time::Instant;
 
-#[derive(Debug, Default)]
 pub struct Statistics {
     pub total_passed: usize,
-    pub max_vehicles: usize,
-    pub max_velocity: f64,
-    pub min_velocity: f64,
-    pub max_time: f64,
-    pub min_time: f64,
-    pub close_calls: usize,
-    pub start_time: Option<Instant>,
-    pub vehicle_count_over_time: Vec<(f64, usize)>,
-    pub avg_velocity_samples: Vec<f64>,
+    pub max_passed:   usize,
+    pub close_calls:  usize,
+    pub max_spd:      f64,
+    pub min_spd:      f64,
+    pub max_time:     f64,
+    pub min_time:     f64,
+    pub vel_sum:      f64,
+    pub vel_count:    usize,
+    pub session_start: Instant,
 }
 
 impl Statistics {
     pub fn new() -> Self {
         Statistics {
-            min_velocity: f64::MAX,
+            total_passed: 0,
+            max_passed: 0,
+            close_calls: 0,
+            max_spd: 0.0,
+            min_spd: f64::MAX,
+            max_time: 0.0,
             min_time: f64::MAX,
-            start_time: Some(Instant::now()),
-            ..Default::default()
+            vel_sum: 0.0,
+            vel_count: 0,
+            session_start: Instant::now(),
         }
     }
 
-    pub fn record_time(&mut self, elapsed: f64) {
-        if elapsed > self.max_time {
-            self.max_time = elapsed;
-        }
-        if elapsed < self.min_time {
-            self.min_time = elapsed;
-        }
+    pub fn record_spd(&mut self, mx: f64, mn: f64) {
+        if mx > self.max_spd { self.max_spd = mx; }
+        if mn < self.min_spd { self.min_spd = mn; }
+        self.vel_sum   += mx;
+        self.vel_count += 1;
     }
 
-    pub fn record_velocity(&mut self, max_v: f64, min_v: f64) {
-        if max_v > self.max_velocity {
-            self.max_velocity = max_v;
-        }
-        if min_v < self.min_velocity {
-            self.min_velocity = min_v;
-        }
-        self.avg_velocity_samples.push((max_v + min_v) / 2.0);
+    pub fn record_time(&mut self, t: f64) {
+        if t > self.max_time { self.max_time = t; }
+        if t < self.min_time { self.min_time = t; }
     }
 
-    pub fn avg_velocity(&self) -> f64 {
-        if self.avg_velocity_samples.is_empty() {
-            return 0.0;
-        }
-        self.avg_velocity_samples.iter().sum::<f64>() / self.avg_velocity_samples.len() as f64
+    pub fn avg_spd(&self) -> f64 {
+        if self.vel_count == 0 { 0.0 } else { self.vel_sum / self.vel_count as f64 }
     }
 
-    pub fn session_duration(&self) -> f64 {
-        self.start_time
-            .map(|t| t.elapsed().as_secs_f64())
-            .unwrap_or(0.0)
+    pub fn min_spd_disp(&self) -> f64 {
+        if self.min_spd == f64::MAX { 0.0 } else { self.min_spd }
     }
 
-    pub fn min_time_display(&self) -> f64 {
-        if self.min_time == f64::MAX {
-            0.0
-        } else {
-            self.min_time
-        }
+    pub fn min_time_disp(&self) -> f64 {
+        if self.min_time == f64::MAX { 0.0 } else { self.min_time }
     }
 
-    pub fn min_velocity_display(&self) -> f64 {
-        if self.min_velocity == f64::MAX {
-            0.0
-        } else {
-            self.min_velocity
-        }
+    pub fn session_secs(&self) -> f64 {
+        self.session_start.elapsed().as_secs_f64()
     }
 }

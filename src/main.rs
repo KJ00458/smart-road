@@ -1,81 +1,62 @@
 mod config;
 mod intersection;
+mod renderer;
 mod stats;
 mod vehicle;
-mod renderer;
 
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use config::*;
-use intersection::Intersection;
+use intersection::World;
 use renderer::Renderer;
 use stats::Statistics;
 use vehicle::{Arm, Vehicle};
 
 fn main() {
-    let sdl = sdl2::init().expect("SDL2 init failed");
-    let video = sdl.video().expect("SDL2 video failed");
-    let ttf = sdl2::ttf::init().expect("TTF init failed");
+    let sdl  = sdl2::init().expect("SDL2");
+    let vid  = sdl.video().expect("video");
+    let ttf  = sdl2::ttf::init().expect("TTF");
 
-    let window = video
-        .window("Smart Road — Autonomous Intersection", WINDOW_W, WINDOW_H)
-        .position_centered()
-        .build()
-        .expect("Window creation failed");
+    let win  = vid.window("Smart Road", WINDOW_W, WINDOW_H)
+        .position_centered().build().expect("window");
+    let canvas = win.into_canvas().accelerated().present_vsync()
+        .build().expect("canvas");
+    let tc = canvas.texture_creator();
 
-    let canvas = window
-        .into_canvas()
-        .accelerated()
-        .present_vsync()
-        .build()
-        .expect("Canvas creation failed");
+    let mut renderer = Renderer::new(canvas, &tc, &ttf);
+    let mut events   = sdl.event_pump().expect("events");
+    let mut world    = World::new();
+    let mut stats    = Statistics::new();
 
-    let texture_creator = canvas.texture_creator();
-    let mut renderer = Renderer::new(canvas, &texture_creator, &ttf);
+    let mut rng_mode  = false;
+    let mut last_rand = Instant::now();
+    let mut key_cd: HashMap<Keycode, Instant> = HashMap::new();
 
-    let mut event_pump = sdl.event_pump().expect("Event pump failed");
-    let mut intersection = Intersection::new();
-    let mut stats = Statistics::new();
+    let frame_dur = Duration::from_secs_f64(1.0 / TARGET_FPS);
 
-    let mut random_mode = false;
-    let mut last_random_spawn = Instant::now();
-    let mut key_spawn_cooldown: std::collections::HashMap<Keycode, Instant> =
-        std::collections::HashMap::new();
+    'main: loop {
+        let t0 = Instant::now();
 
-    let target_frame = Duration::from_secs_f64(1.0 / TARGET_FPS);
-
-    'running: loop {
-        let frame_start = Instant::now();
-
-        for event in event_pump.poll_iter() {
-            match event {
-                Event::Quit { .. } => break 'running,
-                Event::KeyDown {
-                    keycode: Some(kc),
-                    repeat: false,
-                    ..
-                } => match kc {
+        for ev in events.poll_iter() {
+            match ev {
+                Event::Quit {..} => break 'main,
+                Event::KeyDown { keycode: Some(k), repeat: false, .. } => match k {
                     Keycode::Escape => {
-                        renderer.show_statistics(&stats);
-                        break 'running;
+                        renderer.show_stats(&stats);
+                        break 'main;
                     }
-                    Keycode::R => {
-                        random_mode = !random_mode;
-                    }
+                    Keycode::R => rng_mode = !rng_mode,
                     Keycode::Up | Keycode::Down | Keycode::Left | Keycode::Right => {
                         let now = Instant::now();
-                        let ready = key_spawn_cooldown
-                            .get(&kc)
-                            .map(|t| now.duration_since(*t) >= KEY_COOLDOWN)
+                        let ok  = key_cd.get(&k)
+                            .map(|t| now.duration_since(*t) >= KEY_CD)
                             .unwrap_or(true);
-                        if ready {
-                            let arm = arm_from_keycode(kc);
-                            if let Some(v) = Vehicle::spawn_from_arm(arm, &intersection) {
-                                intersection.add_vehicle(v);
-                            }
-                            key_spawn_cooldown.insert(kc, now);
+                        if ok {
+                            world.spawn(Vehicle::new_from_arm(key_to_arm(k)));
+                            key_cd.insert(k, now);
                         }
                     }
                     _ => {}
@@ -84,30 +65,26 @@ fn main() {
             }
         }
 
-        if random_mode && last_random_spawn.elapsed() >= RANDOM_SPAWN_INTERVAL {
-            if let Some(v) = Vehicle::spawn_random(&intersection) {
-                intersection.add_vehicle(v);
-            }
-            last_random_spawn = Instant::now();
+        if rng_mode && last_rand.elapsed() >= RAND_CD {
+            world.spawn(Vehicle::new_random());
+            last_rand = Instant::now();
         }
 
-        let dt = target_frame.as_secs_f64();
-        intersection.update(dt, &mut stats);
-        renderer.draw_frame(&intersection, &stats, random_mode);
+        let dt = frame_dur.as_secs_f64();
+        world.update(dt, &mut stats);
+        renderer.draw(&world, &stats, rng_mode);
 
-        let elapsed = frame_start.elapsed();
-        if elapsed < target_frame {
-            std::thread::sleep(target_frame - elapsed);
-        }
+        let elapsed = t0.elapsed();
+        if elapsed < frame_dur { std::thread::sleep(frame_dur - elapsed); }
     }
 }
 
-fn arm_from_keycode(kc: Keycode) -> Arm {
-    match kc {
+fn key_to_arm(k: Keycode) -> Arm {
+    match k {
         Keycode::Up    => Arm::North,
         Keycode::Down  => Arm::South,
-        Keycode::Right => Arm::East,
         Keycode::Left  => Arm::West,
+        Keycode::Right => Arm::East,
         _ => unreachable!(),
     }
 }
