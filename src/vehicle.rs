@@ -1,7 +1,7 @@
 use rand::Rng;
 use std::time::Instant;
 use crate::config::*;
-use crate::path::{get_path, SNAP};
+use crate::path::get_path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Arm { North, South, East, West }
@@ -12,7 +12,6 @@ pub enum Turn { West, Forward, East }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase { Approaching, Crossing, Exiting }
 
-// Speeds as an enum so control logic is explicit
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Spd { Slow, Med, Fast }
 
@@ -30,23 +29,20 @@ static ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(1);
 
 pub struct Vehicle {
-    pub id:       u64,
-    pub arm:      Arm,
-    pub turn:     Turn,
-    pub phase:    Phase,
-    // Waypoint navigation
-    pub path:     &'static [(f64,f64)],
-    pub wp:       usize,   // index of current target waypoint
-    pub x:        f64,
-    pub y:        f64,
-    // Speed control
-    pub spd:      Spd,
-    // Stats
-    pub color:    usize,
-    pub entry_t:  Option<Instant>,
-    pub exit_t:   Option<Instant>,
-    pub max_spd:  f64,
-    pub min_spd:  f64,
+    pub id:      u64,
+    pub arm:     Arm,
+    pub turn:    Turn,
+    pub phase:   Phase,
+    pub path:    &'static [(f64,f64)],
+    pub wp:      usize,
+    pub x:       f64,
+    pub y:       f64,
+    pub spd:     Spd,
+    pub color:   usize,
+    pub entry_t: Option<Instant>,
+    pub exit_t:  Option<Instant>,
+    pub max_spd: f64,
+    pub min_spd: f64,
 }
 
 impl Vehicle {
@@ -62,8 +58,7 @@ impl Vehicle {
             spd: Spd::Fast,
             color: rand::thread_rng().gen_range(0..8),
             entry_t: None, exit_t: None,
-            max_spd: SPD_FAST,
-            min_spd: SPD_FAST,
+            max_spd: 0.0, min_spd: f64::MAX,
         }
     }
 
@@ -80,20 +75,16 @@ impl Vehicle {
         Self::new(arm, turn)
     }
 
-    /// Move toward current waypoint by `spd * dt` pixels.
-    /// Returns true if the vehicle has passed its final waypoint.
+    /// Advance along waypoints by spd*dt pixels. Returns true when path is complete.
     pub fn step(&mut self, dt: f64) -> bool {
         if self.wp >= self.path.len() { return true; }
-
         let (tx, ty) = self.path[self.wp];
         let dx = tx - self.x;
         let dy = ty - self.y;
         let dist = (dx*dx + dy*dy).sqrt();
         let speed = self.spd.px();
-
-        let step = speed * dt;
+        let step  = speed * dt;
         if step >= dist {
-            // Snap to waypoint, advance
             self.x = tx;
             self.y = ty;
             self.wp += 1;
@@ -102,26 +93,20 @@ impl Vehicle {
             self.x += dx / dist * step;
             self.y += dy / dist * step;
         }
-
-        // Track speed stats
         if speed > self.max_spd { self.max_spd = speed; }
         if speed < self.min_spd { self.min_spd = speed; }
         false
     }
 
-    /// Current heading angle (radians, 0 = East screen direction) for rendering.
+    /// Heading angle (radians, 0=East) toward current waypoint.
     pub fn angle(&self) -> f64 {
         if self.wp < self.path.len() {
             let (tx, ty) = self.path[self.wp];
             (ty - self.y).atan2(tx - self.x)
-        } else if self.wp > 0 {
-            let (px, py) = self.path[self.wp - 1];
-            let (cx, cy) = if self.wp < self.path.len() {
-                self.path[self.wp]
-            } else {
-                (self.x, self.y)
-            };
-            (cy - py).atan2(cx - px)
+        } else if self.wp >= 2 {
+            let (ax, ay) = self.path[self.wp - 2];
+            let (bx, by) = self.path[self.wp - 1];
+            (by - ay).atan2(bx - ax)
         } else {
             0.0
         }
@@ -133,20 +118,21 @@ impl Vehicle {
             _ => None,
         }
     }
+
+    pub fn min_spd_d(&self) -> f64 {
+        if self.min_spd == f64::MAX { 0.0 } else { self.min_spd }
+    }
 }
 
-// ── Conflict table: does path (a1,t1) cross path (a2,t2) inside intersection? ──
+/// Does path (a1,t1) cross path (a2,t2) inside the intersection?
 pub fn paths_conflict(a1: Arm, t1: Turn, a2: Arm, t2: Turn) -> bool {
     if a1 == a2 { return false; }
-    // Right turns are short — they clear the intersection fast, skip conflict
     if t1 == Turn::East && t2 == Turn::East { return false; }
-    // Opposite arms going straight: parallel, no conflict
     let opp = matches!(
         (a1,a2),
         (Arm::North,Arm::South)|(Arm::South,Arm::North)
         |(Arm::East,Arm::West)|(Arm::West,Arm::East)
     );
     if opp && t1 == Turn::Forward && t2 == Turn::Forward { return false; }
-    // Everything else potentially conflicts
     true
 }
