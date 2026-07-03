@@ -47,7 +47,6 @@ impl Intersection {
         let iw = ROAD_WIDTH;
         let approach_zone = iw * 0.8;
 
-        // Reserve for vehicles in intersection OR very close to entry
         let reservation_holders: Vec<(u64, Arm, Turn)> = self
             .vehicles
             .iter()
@@ -94,19 +93,25 @@ impl Intersection {
         for i in 0..self.vehicles.len() {
             let vi = &snapshots[i];
             for j in 0..snapshots.len() {
-                if i == j { continue; }
+                if i == j {
+                    continue;
+                }
                 let vj = &snapshots[j];
 
-                // Only apply same-arm, same-lane vehicles (or both in intersection)
-                if vi.3 != vj.3 { continue; }
+                if vi.3 != vj.3 {
+                    continue;
+                }
                 if vi.4 != vj.4
                     && vi.5 != VehicleState::InIntersection
                     && vj.5 != VehicleState::InIntersection
-                { continue; }
+                {
+                    continue;
+                }
 
-                // vj is ahead if it's further along vi's travel direction
                 let is_ahead = vi.6 * (vj.1 - vi.1) + vi.7 * (vj.2 - vi.2) > 0.0;
-                if !is_ahead { continue; }
+                if !is_ahead {
+                    continue;
+                }
 
                 let dist = ((vi.1 - vj.1).powi(2) + (vi.2 - vj.2).powi(2)).sqrt();
                 if dist < SAFE_DISTANCE {
@@ -124,7 +129,9 @@ impl Intersection {
         let iy = INTERSECTION_Y;
         let iw = ROAD_WIDTH;
         for v in &mut self.vehicles {
-            if v.state != VehicleState::Approaching { continue; }
+            if v.state != VehicleState::Approaching {
+                continue;
+            }
             if is_in_box(v.x, v.y, ix, iy, iw) {
                 v.state = VehicleState::InIntersection;
                 v.entry_time = Some(Instant::now());
@@ -138,7 +145,9 @@ impl Intersection {
         let iy = INTERSECTION_Y;
         let iw = ROAD_WIDTH;
         for v in &mut self.vehicles {
-            if v.state != VehicleState::InIntersection { continue; }
+            if v.state != VehicleState::InIntersection {
+                continue;
+            }
             if !is_in_box(v.x, v.y, ix, iy, iw) {
                 v.state = VehicleState::Exiting;
                 v.exit_time = Some(Instant::now());
@@ -158,7 +167,9 @@ impl Intersection {
             for j in (i + 1)..n {
                 let a = &self.vehicles[i];
                 let b = &self.vehicles[j];
-                if a.arm == b.arm { continue; }
+                if a.arm == b.arm {
+                    continue;
+                }
                 let dist = ((a.x - b.x).powi(2) + (a.y - b.y).powi(2)).sqrt();
                 if dist < SAFE_DISTANCE * 0.5 && dist > 2.0 {
                     count += 1;
@@ -196,34 +207,36 @@ fn is_in_box(x: f64, y: f64, ix: f64, iy: f64, iw: f64) -> bool {
     x >= ix && x <= ix + iw && y >= iy && y <= iy + iw
 }
 
-/// Conflict detection adapted for the 6-lane / West-Forward-East model.
-/// Two paths conflict if their trajectories cross inside the intersection.
 pub fn paths_conflict(a1: Arm, t1: Turn, a2: Arm, t2: Turn) -> bool {
-    if a1 == a2 { return false; }             // same arm, no conflict
-    if t1 == Turn::East && t2 == Turn::East { return false; } // both right-turn
-    if t1 == Turn::East { return false; }     // right turn never conflicts
-    if t2 == Turn::East { return false; }     // ditto
-
-    use Arm::*;
-    use Turn::*;
+    if a1 == a2 { return false; }
+    // Right turns (East) never conflict
+    if t1 == Turn::East { return false; }
+    if t2 == Turn::East { return false; }
 
     let opposite = matches!(
         (a1, a2),
-        (North, South) | (South, North) | (East, West) | (West, East)
+        (Arm::North, Arm::South)
+            | (Arm::South, Arm::North)
+            | (Arm::East,  Arm::West)
+            | (Arm::West,  Arm::East)
     );
 
     if opposite {
-        if t1 == Forward && t2 == Forward { return false; } // both straight, parallel
-        return true; // one or both turning left across center
+        // Both going straight on opposite arms: parallel lanes, no conflict
+        if t1 == Turn::Forward && t2 == Turn::Forward {
+            return false;
+        }
+        // One or both turning left across center
+        return true;
     }
 
     // Perpendicular arms
-    // Left turn (West) always conflicts with perpendicular
-    // Straight conflicts with perpendicular left turn
-    if t1 == West { return true; }
-    if t2 == West { return true; }
-    // Both Forward from perpendicular arms: they cross
-    if t1 == Forward && t2 == Forward { return true; }
+    if t1 == Turn::West { return true; } // left turn always conflicts
+    if t2 == Turn::West { return true; }
+    // Both going straight from perpendicular arms cross paths
+    if t1 == Turn::Forward && t2 == Turn::Forward {
+        return true;
+    }
 
     false
 }
