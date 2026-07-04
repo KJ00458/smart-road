@@ -10,14 +10,14 @@ use crate::stats::Statistics;
 use crate::vehicle::{Vehicle, Phase, Spd};
 
 const COLORS: [(u8,u8,u8);8] = [
-    (210,50,50),(50,145,220),(50,195,90),(240,175,30),
+    (210,55,55),(55,145,220),(55,200,90),(240,175,30),
     (175,70,215),(235,115,40),(40,215,215),(215,215,215),
 ];
-const HUD_W:  u32 = 240;
-const HUD_X:  i32 = (900 - 248) as i32;
-const HUD_Y:  i32 = 8;
-const LINE_H: i32 = 19;
-const PAD:    i32 = 9;
+const HUD_W:  u32 = 255;
+const HUD_X:  i32 = (WINDOW_W - HUD_W - 10) as i32;
+const HUD_Y:  i32 = 10;
+const LINE_H: i32 = 21;
+const PAD:    i32 = 10;
 
 pub struct Renderer<'f,'tc> {
     canvas: Canvas<Window>,
@@ -30,15 +30,19 @@ impl<'f,'tc> Renderer<'f,'tc> {
     pub fn new(canvas: Canvas<Window>, tc: &'tc TextureCreator<WindowContext>,
                ttf: &'f Sdl2TtfContext) -> Self {
         let fp = font_path();
-        Renderer { canvas, font: ttf.load_font(&fp,14).expect("font"),
-                   fontlg: ttf.load_font(&fp,22).expect("fontlg"), tc }
+        Renderer {
+            canvas,
+            font:   ttf.load_font(&fp, 15).expect("font"),
+            fontlg: ttf.load_font(&fp, 24).expect("fontlg"),
+            tc,
+        }
     }
 
     pub fn draw(&mut self, world: &World, stats: &Statistics, rng: bool) {
-        self.canvas.set_draw_color(col(C_GRASS)); self.canvas.clear();
+        self.canvas.set_draw_color(col(C_GRASS));
+        self.canvas.clear();
         self.road();
         self.lane_marks();
-        // Draw sensors first (under cars)
         for v in &world.vehicles { self.sensor_beam(v); }
         for v in &world.vehicles { self.vehicle(v); }
         self.hud(stats, world.vehicles.len(), rng);
@@ -61,10 +65,10 @@ impl<'f,'tc> Renderer<'f,'tc> {
         self.canvas.set_draw_color(col(C_YELLOW));
         for i in 1..LANES as i32 {
             if i == mid { continue; }
-            self.dv(ix+i*t, 0,     iy,    20, 18);
-            self.dv(ix+i*t, iy+rw, WINDOW_H as i32, 20, 18);
-            self.dh(iy+i*t, 0,     ix,    20, 18);
-            self.dh(iy+i*t, ix+rw, WINDOW_W as i32, 20, 18);
+            self.dv(ix+i*t, 0,     iy,    22, 18);
+            self.dv(ix+i*t, iy+rw, WINDOW_H as i32, 22, 18);
+            self.dh(iy+i*t, 0,     ix,    22, 18);
+            self.dh(iy+i*t, ix+rw, WINDOW_W as i32, 22, 18);
         }
         self.canvas.set_draw_color(col(C_WHITE));
         let (cx,cy) = (ix+mid*t, iy+mid*t);
@@ -83,41 +87,49 @@ impl<'f,'tc> Renderer<'f,'tc> {
             self.canvas.fill_rect(Rect::new(x,y-1,(e-x) as u32,2)).ok(); x+=d+g; }
     }
 
-    /// Draw a translucent sensor beam rectangle in front of the vehicle.
+    /// Draw dotted border outline of the sensor cone (no fill).
     fn sensor_beam(&mut self, v: &Vehicle) {
-        // Only show beam when approaching or crossing
         if v.phase == Phase::Exiting { return; }
-        let a = v.angle();
+        let a   = v.angle();
         let (fx, fy) = (a.cos(), a.sin());
-        // Perpendicular direction
         let (px, py) = (-fy, fx);
-        let hw = SENSOR_HALF_W as f64;
+        let hw  = SENSOR_HALF_W;
         let len = v.sensor_range;
-        // Beam: 4 corners of a rotated rectangle starting at vehicle front
         let front_x = v.x + fx * (VH / 2.0);
         let front_y = v.y + fy * (VH / 2.0);
-        let corners = [
-            (front_x - px*hw, front_y - py*hw),
-            (front_x + px*hw, front_y + py*hw),
-            (front_x + fx*len + px*hw, front_y + fy*len + py*hw),
-            (front_x + fx*len - px*hw, front_y + fy*len - py*hw),
-        ];
-        let pts: Vec<sdl2::rect::Point> = corners.iter()
-            .map(|&(x,y)| spt(x,y)).collect();
-        // Color: cyan if fast, yellow if med, red if slow
+
+        // 4 corners of the cone rectangle
+        let tl = (front_x - px*hw, front_y - py*hw);  // near-left
+        let tr = (front_x + px*hw, front_y + py*hw);  // near-right
+        let br = (front_x + fx*len + px*hw, front_y + fy*len + py*hw); // far-right
+        let bl = (front_x + fx*len - px*hw, front_y + fy*len - py*hw); // far-left
+
+        // Color by speed state
         let beam_col = match v.spd {
-            Spd::Fast => Color::RGBA(0, 200, 255, 40),
-            Spd::Med  => Color::RGBA(255, 200, 0, 50),
-            Spd::Slow => Color::RGBA(255, 60, 60, 60),
+            Spd::Fast => Color::RGBA(  0, 200, 255, 180),
+            Spd::Med  => Color::RGBA(255, 195,   0, 180),
+            Spd::Slow => Color::RGBA(255,  50,  50, 180),
         };
         self.canvas.set_draw_color(beam_col);
-        fill_poly(&mut self.canvas, &pts);
+
+        // Draw dotted lines along each edge of the rectangle
+        dot_line(&mut self.canvas, tl, tr, 5, 4);  // near edge
+        dot_line(&mut self.canvas, bl, br, 5, 4);  // far edge
+        dot_line(&mut self.canvas, tl, bl, 5, 4);  // left side
+        dot_line(&mut self.canvas, tr, br, 5, 4);  // right side
     }
 
     fn vehicle(&mut self, v: &Vehicle) {
-        let (r,g,b) = COLORS[v.color % 8];
-        let a = v.angle();
-        let hw = VW/2.0; let hh = VH/2.0;
+        // If crashed, tint dark red
+        let base = if v.crashed {
+            (180u8, 20u8, 20u8)
+        } else {
+            COLORS[v.color % 8]
+        };
+        let (r,g,b) = base;
+        let a  = v.angle();
+        let hw = VW/2.0;
+        let hh = VH/2.0;
         let corners = [rot(-hw,-hh,a),rot(hw,-hh,a),rot(hw,hh,a),rot(-hw,hh,a)];
         let pts: Vec<sdl2::rect::Point> = corners.iter()
             .map(|(dx,dy)| spt(v.x+dx, v.y+dy)).collect();
@@ -134,51 +146,55 @@ impl<'f,'tc> Renderer<'f,'tc> {
         // headlights
         self.canvas.set_draw_color(Color::RGB(255,255,180));
         for sx in &[-hw*0.5, hw*0.5] {
-            let (dx,dy)=rot(*sx,-hh+3.0,a);
+            let (dx,dy)=rot(*sx,-hh+4.0,a);
             self.canvas.fill_rect(Rect::new((v.x+dx-3.0) as i32,(v.y+dy-3.0) as i32,6,6)).ok();
         }
-        // brake lights — red when slow/med
+        // brake lights — bright red when braking
         let tl_col = if v.spd == Spd::Slow || v.spd == Spd::Med {
             Color::RGB(255,20,20)
         } else {
-            Color::RGB(120,10,10)
+            Color::RGB(110,10,10)
         };
         self.canvas.set_draw_color(tl_col);
         for sx in &[-hw*0.5, hw*0.5] {
-            let (dx,dy)=rot(*sx,hh-3.0,a);
+            let (dx,dy)=rot(*sx,hh-4.0,a);
             self.canvas.fill_rect(Rect::new((v.x+dx-3.0) as i32,(v.y+dy-3.0) as i32,6,6)).ok();
         }
     }
 
     fn hud(&mut self, s: &Statistics, on: usize, rng: bool) {
-        let div = "─────────────────────";
+        let div = "─────────────────────────";
         let lines: Vec<(String,Color)> = vec![
-            ("◈ SMART ROAD".into(),                            c(C_HUD_TITLE)),
-            (div.into(),                                       c(C_HUD_DIM)),
-            (format!("Passed      {:>6}", s.total_passed),    c(C_HUD_VAL)),
-            (format!("On screen   {:>6}", on),                Color::WHITE),
-            (format!("Close calls {:>6}", s.close_calls),
-                if s.close_calls>0 {c(C_HUD_WARN)} else {c(C_HUD_VAL)}),
-            (div.into(),                                       c(C_HUD_DIM)),
-            (format!("Max spd {:>8.1} px/s", s.max_spd),     c(C_HUD_VAL)),
-            (format!("Min spd {:>8.1} px/s", s.min_spd_d()), Color::WHITE),
-            (format!("Avg spd {:>8.1} px/s", s.avg_spd()),   Color::WHITE),
-            (div.into(),                                       c(C_HUD_DIM)),
-            (format!("Max transit {:>5.3}s", s.max_time),    c(C_HUD_VAL)),
-            (format!("Min transit {:>5.3}s", s.min_time_d()),Color::WHITE),
-            (div.into(),                                       c(C_HUD_DIM)),
-            ("CONTROLS".into(),                              Color::RGB(180,180,220)),
-            (format!("[R] Auto  {}",if rng{"ON "}else{"OFF"}),
+            ("◈  SMART ROAD".into(),                              c(C_HUD_TITLE)),
+            (div.into(),                                          c(C_HUD_DIM)),
+            (format!("Passed      {:>6}",  s.total_passed),      c(C_HUD_VAL)),
+            (format!("On screen   {:>6}",  on),                  Color::WHITE),
+            (format!("Crashes     {:>6}",  s.crashes),
+                if s.crashes>0 {c(C_HUD_CRASH)} else {c(C_HUD_VAL)}),
+            (format!("Close calls {:>6}",  s.close_calls / 60),
+                if s.close_calls>60 {c(C_HUD_WARN)} else {c(C_HUD_VAL)}),
+            (div.into(),                                          c(C_HUD_DIM)),
+            (format!("Max spd {:>8.1} px/s", s.max_spd),        c(C_HUD_VAL)),
+            (format!("Min spd {:>8.1} px/s", s.min_spd_d()),    Color::WHITE),
+            (format!("Avg spd {:>8.1} px/s", s.avg_spd()),      Color::WHITE),
+            (div.into(),                                          c(C_HUD_DIM)),
+            (format!("Max transit {:>6.2}s", s.max_time),       c(C_HUD_VAL)),
+            (format!("Min transit {:>6.2}s", s.min_time_d()),   Color::WHITE),
+            (div.into(),                                          c(C_HUD_DIM)),
+            ("  CONTROLS".into(),                               Color::RGB(170,170,215)),
+            (format!("  [R] Auto  {}", if rng{"ON "}else{"OFF"}),
                 if rng{c(C_HUD_ON)}else{c(C_HUD_OFF)}),
-            ("[↑↓←→] Spawn car".into(),                       Color::WHITE),
-            ("[ESC]  Stats & quit".into(),                   c(C_HUD_DIM)),
+            ("  [↑↓←→] Spawn car".into(),                       Color::WHITE),
+            ("  [ESC]   Stats & quit".into(),                   c(C_HUD_DIM)),
         ];
-        let hh = lines.len() as i32 * LINE_H + PAD*2;
+        let box_h = lines.len() as i32 * LINE_H + PAD*2;
+        // Dark panel
         self.canvas.set_draw_color(Color::RGBA(C_HUD_BG.0,C_HUD_BG.1,C_HUD_BG.2,C_HUD_BG.3));
-        self.canvas.fill_rect(Rect::new(HUD_X,HUD_Y,HUD_W,hh as u32)).ok();
-        self.canvas.set_draw_color(Color::RGB(55,80,120));
-        self.canvas.draw_rect(Rect::new(HUD_X,HUD_Y,HUD_W,hh as u32)).ok();
-        let mut ty = HUD_Y+PAD;
+        self.canvas.fill_rect(Rect::new(HUD_X,HUD_Y,HUD_W,box_h as u32)).ok();
+        // Border
+        self.canvas.set_draw_color(Color::RGB(40,65,105));
+        self.canvas.draw_rect(Rect::new(HUD_X,HUD_Y,HUD_W,box_h as u32)).ok();
+        let mut ty = HUD_Y + PAD;
         for (txt,color) in &lines { self.blit(txt,*color,HUD_X+PAD,ty); ty+=LINE_H; }
     }
 
@@ -191,44 +207,70 @@ impl<'f,'tc> Renderer<'f,'tc> {
     }
 
     pub fn show_stats(&mut self, s: &Statistics) {
-        let div = "────────────────────────────────────────";
+        let div = "────────────────────────────────────────────";
         let lines: Vec<(String,Color)> = vec![
-            ("SMART ROAD — STATISTICS".into(),              c(C_HUD_TITLE)),
-            (div.into(),                                     Color::WHITE),
-            (format!("Vehicles passed   {}",s.total_passed), c(C_HUD_VAL)),
-            (format!("Session           {:.1}s",s.session_secs()),Color::WHITE),
-            (div.into(),                                     Color::WHITE),
+            ("SMART ROAD — STATISTICS".into(),               c(C_HUD_TITLE)),
+            (div.into(),                                      Color::WHITE),
+            (format!("Vehicles passed   {}", s.total_passed), c(C_HUD_VAL)),
+            (format!("Session           {:.1}s",s.session_secs()), Color::WHITE),
+            (div.into(),                                      Color::WHITE),
+            (format!("Crashes           {}", s.crashes),
+                if s.crashes>0{c(C_HUD_CRASH)}else{c(C_HUD_VAL)}),
+            (format!("Close calls       {}", s.close_calls/60), c(C_HUD_WARN)),
+            (div.into(),                                      Color::WHITE),
             (format!("Max velocity      {:.1} px/s",s.max_spd), c(C_HUD_VAL)),
             (format!("Min velocity      {:.1} px/s",s.min_spd_d()),Color::WHITE),
             (format!("Avg velocity      {:.1} px/s",s.avg_spd()),Color::WHITE),
-            (div.into(),                                     Color::WHITE),
-            (format!("Max transit       {:.3}s",s.max_time), c(C_HUD_VAL)),
-            (format!("Min transit       {:.3}s",s.min_time_d()),Color::WHITE),
-            (div.into(),                                     Color::WHITE),
-            (format!("Close calls       {}",s.close_calls),
-                if s.close_calls>0{c(C_HUD_WARN)}else{c(C_HUD_VAL)}),
-            (div.into(),                                     Color::WHITE),
-            ("(closes in 3s)".into(),                       c(C_HUD_DIM)),
+            (div.into(),                                      Color::WHITE),
+            (format!("Max transit       {:.2}s",s.max_time), c(C_HUD_VAL)),
+            (format!("Min transit       {:.2}s",s.min_time_d()),Color::WHITE),
+            (div.into(),                                      Color::WHITE),
+            ("(closes in 3s)".into(),                        c(C_HUD_DIM)),
         ];
         for _frame in 0..180u32 {
-            self.canvas.set_draw_color(Color::RGB(10,10,25));
+            self.canvas.set_draw_color(Color::RGB(8,8,18));
             self.canvas.clear();
-            let mut y = 70i32;
+            let mut y = 80i32;
             for (txt,col) in &lines {
                 if txt.starts_with("SMART") {
                     let s2 = self.fontlg.render(txt).blended(*col)
                         .unwrap_or_else(|_| self.fontlg.render(" ").blended(*col).unwrap());
                     let tx = self.tc.create_texture_from_surface(&s2).unwrap();
                     let sdl2::render::TextureQuery{width,height,..} = tx.query();
-                    self.canvas.copy(&tx,None,Some(Rect::new(70,y,width,height))).ok();
-                    y += height as i32 + 10;
+                    self.canvas.copy(&tx,None,Some(Rect::new(80,y,width,height))).ok();
+                    y += height as i32 + 12;
                 } else {
-                    self.blit(txt,*col,70,y); y += LINE_H+4;
+                    self.blit(txt,*col,80,y); y += LINE_H+4;
                 }
             }
             self.canvas.present();
             std::thread::sleep(std::time::Duration::from_millis(16));
         }
+    }
+}
+
+/// Draw a dotted line between two points (dot_len pixels on, gap_len pixels off).
+fn dot_line(
+    canvas: &mut Canvas<Window>,
+    (x0,y0): (f64,f64),
+    (x1,y1): (f64,f64),
+    dot_len: i32,
+    gap_len: i32,
+) {
+    let dx = x1 - x0; let dy = y1 - y0;
+    let total = (dx*dx+dy*dy).sqrt();
+    if total < 1.0 { return; }
+    let ux = dx/total; let uy = dy/total;
+    let step = (dot_len + gap_len) as f64;
+    let mut t = 0.0f64;
+    while t < total {
+        let t_end = (t + dot_len as f64).min(total);
+        let ax = (x0 + ux*t)   as i32;
+        let ay = (y0 + uy*t)   as i32;
+        let bx = (x0 + ux*t_end) as i32;
+        let by = (y0 + uy*t_end) as i32;
+        canvas.draw_line(sdl2::rect::Point::new(ax,ay), sdl2::rect::Point::new(bx,by)).ok();
+        t += step;
     }
 }
 

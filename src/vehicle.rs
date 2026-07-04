@@ -12,7 +12,6 @@ pub enum Turn { Right, Forward, Left }
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Phase { Approaching, Crossing, Exiting }
 
-/// Three discrete speed states.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Spd { Slow, Med, Fast }
 
@@ -30,24 +29,24 @@ static ID: std::sync::atomic::AtomicU64 =
     std::sync::atomic::AtomicU64::new(1);
 
 pub struct Vehicle {
-    pub id:       u64,
-    pub arm:      Arm,
-    pub turn:     Turn,
-    pub phase:    Phase,
-    pub path:     &'static [(f64,f64)],
-    pub wp:       usize,
-    pub x:        f64,
-    pub y:        f64,
-    pub spd:      Spd,
-    pub color:    usize,
-    pub entry_t:  Option<Instant>,
-    pub exit_t:   Option<Instant>,
-    pub max_spd:  f64,
-    pub min_spd:  f64,
-    /// Priority: lower number = higher priority (assigned at spawn time, monotone increasing).
-    pub priority: u64,
-    /// Sensor cone: how far ahead (px) the car "sees" on its own lane
+    pub id:           u64,
+    pub arm:          Arm,
+    pub turn:         Turn,
+    pub phase:        Phase,
+    pub path:         &'static [(f64,f64)],
+    pub wp:           usize,
+    pub x:            f64,
+    pub y:            f64,
+    pub spd:          Spd,
+    pub color:        usize,
+    pub entry_t:      Option<Instant>,
+    pub exit_t:       Option<Instant>,
+    pub max_spd:      f64,
+    pub min_spd:      f64,
+    pub priority:     u64,
     pub sensor_range: f64,
+    /// True once this vehicle has been tagged in a crash event
+    pub crashed:      bool,
 }
 
 impl Vehicle {
@@ -64,8 +63,9 @@ impl Vehicle {
             color: rand::thread_rng().gen_range(0..8),
             entry_t: None, exit_t: None,
             max_spd: 0.0, min_spd: f64::MAX,
-            priority: id,   // earlier-spawned = higher priority
+            priority: id,
             sensor_range: SENSOR_RANGE,
+            crashed: false,
         }
     }
 
@@ -82,7 +82,8 @@ impl Vehicle {
         Self::new(arm, turn)
     }
 
-    /// Advance along waypoints by spd*dt pixels. Returns true when path is complete.
+    /// Advance along waypoints. Returns true only when the LAST waypoint
+    /// (which is off-screen) has been reached — so cars finish their full lane.
     pub fn step(&mut self, dt: f64) -> bool {
         if self.wp >= self.path.len() { return true; }
         let (tx, ty) = self.path[self.wp];
@@ -92,9 +93,9 @@ impl Vehicle {
         let speed = self.spd.px();
         let step  = speed * dt;
         if step >= dist {
-            self.x = tx;
-            self.y = ty;
+            self.x = tx; self.y = ty;
             self.wp += 1;
+            // Only despawn once the FINAL waypoint (off-screen) is reached
             if self.wp >= self.path.len() { return true; }
         } else {
             self.x += dx / dist * step;
@@ -105,7 +106,6 @@ impl Vehicle {
         false
     }
 
-    /// Heading angle (radians, 0=East) toward current waypoint.
     pub fn angle(&self) -> f64 {
         if self.wp < self.path.len() {
             let (tx, ty) = self.path[self.wp];
@@ -114,28 +114,20 @@ impl Vehicle {
             let (ax, ay) = self.path[self.wp - 2];
             let (bx, by) = self.path[self.wp - 1];
             (by - ay).atan2(bx - ax)
-        } else {
-            0.0
-        }
+        } else { 0.0 }
     }
 
-    /// Forward direction unit vector toward current waypoint.
     pub fn forward_dir(&self) -> (f64, f64) {
-        let a = self.angle();
-        (a.cos(), a.sin())
+        let a = self.angle(); (a.cos(), a.sin())
     }
 
-    /// Signed distance of point (px,py) projected onto the forward axis.
-    /// Positive = ahead of the vehicle.
     pub fn forward_dist_to(&self, px: f64, py: f64) -> f64 {
         let (fx, fy) = self.forward_dir();
         fx*(px - self.x) + fy*(py - self.y)
     }
 
-    /// Lateral offset of point (px,py) from the vehicle's forward axis.
     pub fn lateral_offset_to(&self, px: f64, py: f64) -> f64 {
         let (fx, fy) = self.forward_dir();
-        // perpendicular = (-fy, fx)
         -fy*(px - self.x) + fx*(py - self.y)
     }
 
@@ -151,12 +143,6 @@ impl Vehicle {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Path-conflict helper (geometrically: do the two waypoint paths share a cell?)
-// ---------------------------------------------------------------------------
-
-/// Returns true if paths for (a1,t1) and (a2,t2) share at least one waypoint
-/// within CONFLICT_DIST pixels of each other — i.e. they geometrically cross.
 pub fn paths_conflict(a1: Arm, t1: Turn, a2: Arm, t2: Turn) -> bool {
     if a1 == a2 { return false; }
     use crate::path::get_path;

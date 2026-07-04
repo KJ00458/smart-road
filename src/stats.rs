@@ -4,6 +4,7 @@ pub struct Statistics {
     pub total_passed: usize,
     pub max_passed:   usize,
     pub close_calls:  usize,
+    pub crashes:      usize,   // NEW: actual collision count
     pub max_spd:  f64,
     pub min_spd:  f64,
     pub max_time: f64,
@@ -16,7 +17,7 @@ pub struct Statistics {
 impl Statistics {
     pub fn new() -> Self {
         Statistics {
-            total_passed:0, max_passed:0, close_calls:0,
+            total_passed:0, max_passed:0, close_calls:0, crashes:0,
             max_spd:0.0, min_spd:f64::MAX,
             max_time:0.0, min_time:f64::MAX,
             vel_sum:0.0, vel_n:0,
