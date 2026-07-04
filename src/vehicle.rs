@@ -43,9 +43,9 @@ pub struct Vehicle {
     pub exit_t:       Option<Instant>,
     pub max_spd:      f64,
     pub min_spd:      f64,
+    /// priority = spawn ID; LOWER id = spawned earlier = higher priority (right of way)
     pub priority:     u64,
     pub sensor_range: f64,
-    /// True once this vehicle has been tagged in a crash event
     pub crashed:      bool,
 }
 
@@ -82,8 +82,7 @@ impl Vehicle {
         Self::new(arm, turn)
     }
 
-    /// Advance along waypoints. Returns true only when the LAST waypoint
-    /// (which is off-screen) has been reached — so cars finish their full lane.
+    /// Advance along waypoints. Returns true when final (off-screen) waypoint reached.
     pub fn step(&mut self, dt: f64) -> bool {
         if self.wp >= self.path.len() { return true; }
         let (tx, ty) = self.path[self.wp];
@@ -95,7 +94,6 @@ impl Vehicle {
         if step >= dist {
             self.x = tx; self.y = ty;
             self.wp += 1;
-            // Only despawn once the FINAL waypoint (off-screen) is reached
             if self.wp >= self.path.len() { return true; }
         } else {
             self.x += dx / dist * step;
@@ -106,6 +104,7 @@ impl Vehicle {
         false
     }
 
+    /// Direction toward the current waypoint (or last segment if done).
     pub fn angle(&self) -> f64 {
         if self.wp < self.path.len() {
             let (tx, ty) = self.path[self.wp];
@@ -131,6 +130,45 @@ impl Vehicle {
         -fy*(px - self.x) + fx*(py - self.y)
     }
 
+    /// Shortest distance from point (px,py) to this vehicle's remaining path segments.
+    /// Used by the sensor to check if another car is on our future path.
+    pub fn dist_to_future_path(&self, px: f64, py: f64) -> f64 {
+        let mut best = f64::MAX;
+        // start from current position segment
+        let seg_start = if self.wp > 0 { self.wp - 1 } else { 0 };
+        for i in seg_start..self.path.len().saturating_sub(1) {
+            let (ax, ay) = if i == seg_start { (self.x, self.y) } else { self.path[i] };
+            let (bx, by) = self.path[i + 1];
+            let d = point_to_segment_dist(px, py, ax, ay, bx, by);
+            if d < best { best = d; }
+        }
+        best
+    }
+
+    /// Approximate path distance from this vehicle's current position to point (px,py),
+    /// only counting if the point projects *ahead* along the remaining path.
+    pub fn path_dist_ahead_to(&self, px: f64, py: f64) -> Option<f64> {
+        // Check if the point is near any future segment
+        let seg_start = if self.wp > 0 { self.wp - 1 } else { 0 };
+        let mut accumulated = 0.0f64;
+        for i in seg_start..self.path.len().saturating_sub(1) {
+            let (ax, ay) = if i == seg_start { (self.x, self.y) } else { self.path[i] };
+            let (bx, by) = self.path[i + 1];
+            let seg_len = ((bx-ax)*(bx-ax)+(by-ay)*(by-ay)).sqrt();
+            let d = point_to_segment_dist(px, py, ax, ay, bx, by);
+            if d < SENSOR_HALF_W * 2.0 {
+                // project the point onto this segment to get how far along
+                let t = if seg_len > 0.0 {
+                    let dot = (px-ax)*(bx-ax)+(py-ay)*(by-ay);
+                    (dot / (seg_len*seg_len)).clamp(0.0, 1.0)
+                } else { 0.0 };
+                return Some(accumulated + t * seg_len);
+            }
+            accumulated += seg_len;
+        }
+        None
+    }
+
     pub fn elapsed(&self) -> Option<f64> {
         match (self.entry_t, self.exit_t) {
             (Some(a), Some(b)) => Some(b.duration_since(a).as_secs_f64()),
@@ -143,15 +181,35 @@ impl Vehicle {
     }
 }
 
+/// Minimum distance from point P to segment AB.
+pub fn point_to_segment_dist(px: f64, py: f64, ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
+    let dx = bx - ax; let dy = by - ay;
+    let len2 = dx*dx + dy*dy;
+    if len2 < 1e-9 { return ((px-ax)*(px-ax)+(py-ay)*(py-ay)).sqrt(); }
+    let t = ((px-ax)*dx+(py-ay)*dy) / len2;
+    let t = t.clamp(0.0, 1.0);
+    let cx = ax + t*dx; let cy = ay + t*dy;
+    ((px-cx)*(px-cx)+(py-cy)*(py-cy)).sqrt()
+}
+
+/// True if paths of (a1,t1) and (a2,t2) share any point closer than CONFLICT_DIST.
 pub fn paths_conflict(a1: Arm, t1: Turn, a2: Arm, t2: Turn) -> bool {
     if a1 == a2 { return false; }
     use crate::path::get_path;
     let p1 = get_path(a1, t1);
     let p2 = get_path(a2, t2);
-    for &(x1,y1) in p1 {
-        for &(x2,y2) in p2 {
-            let d = ((x1-x2)*(x1-x2)+(y1-y2)*(y1-y2)).sqrt();
-            if d < CONFLICT_DIST { return true; }
+    // Check segment-to-segment distance for better accuracy
+    for i in 0..p1.len().saturating_sub(1) {
+        let (a1x,a1y) = p1[i]; let (b1x,b1y) = p1[i+1];
+        for j in 0..p2.len().saturating_sub(1) {
+            let (a2x,a2y) = p2[j]; let (b2x,b2y) = p2[j+1];
+            // sample points along each segment
+            for k in 0..=8 {
+                let t = k as f64 / 8.0;
+                let x1 = a1x + t*(b1x-a1x); let y1 = a1y + t*(b1y-a1y);
+                let d = point_to_segment_dist(x1, y1, a2x, a2y, b2x, b2y);
+                if d < CONFLICT_DIST { return true; }
+            }
         }
     }
     false

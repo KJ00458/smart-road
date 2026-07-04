@@ -15,7 +15,7 @@ pub const IY: f64 = (WINDOW_H as f64 - ROAD) / 2.0; // 370
 pub const VW: f64 = 36.0;
 pub const VH: f64 = 48.0;
 
-// Three speeds (px/s) — deliberately slow so you can watch the logic
+// Three speeds (px/s)
 pub const SPD_SLOW:   f64 =  28.0;
 pub const SPD_MED:    f64 =  70.0;
 pub const SPD_FAST:   f64 = 130.0;
@@ -24,18 +24,22 @@ pub const SPD_FAST:   f64 = 130.0;
 pub const GAP:       f64 = VH * 2.8;   // ~134 px
 pub const STOP_GAP:  f64 = VH * 1.3;   // ~62 px
 
-// Sensor cone
-pub const SENSOR_HALF_W: f64 = VW * 0.65;
-pub const SENSOR_RANGE:  f64 = 260.0;
+// Sensor cone — scans the road ahead along the car's path
+pub const SENSOR_HALF_W: f64 = VW * 0.7;
+pub const SENSOR_RANGE:  f64 = 280.0;
 
 // Conflict / priority thresholds
+// A car is "near the box" when it is within this many px of the intersection
+pub const NEAR_BOX_DIST:  f64 = 180.0;
+// Two conflicting paths are considered to clash if their waypoints are this close
 pub const CONFLICT_DIST:  f64 = TILE * 1.3;
-pub const PRIORITY_DIST:  f64 = 260.0;
+// We apply priority logic when the other car is this close
+pub const PRIORITY_DIST:  f64 = 300.0;
 
 // Crash threshold: two vehicles this close = crash
 pub const CRASH_DIST: f64 = VH * 0.85;
 
-// Off-screen spawn/despawn margin — cars must travel fully off screen
+// Off-screen spawn/despawn margin
 pub const OFF: f64 = 80.0;
 
 // Timers
