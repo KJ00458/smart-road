@@ -11,51 +11,62 @@ pub const ROAD: f64 = TILE * LANES as f64; // 360
 pub const IX: f64 = (WINDOW_W as f64 - ROAD) / 2.0; // 370
 pub const IY: f64 = (WINDOW_H as f64 - ROAD) / 2.0; // 370
 
-// Vehicle box
-pub const VW: f64 = 36.0;
-pub const VH: f64 = 48.0;
+// Vehicle box (matches Golden76z tile sizes scaled to our grid)
+pub const VW: f64 = TILE;         // 60px  (full tile width)
+pub const VH: f64 = TILE;         // 60px  (full tile height)
 
-// Three speeds (px/s)
-pub const SPD_SLOW:   f64 =  28.0;
-pub const SPD_MED:    f64 =  70.0;
-pub const SPD_FAST:   f64 = 130.0;
+// ── Speeds ── (Golden76z exact values, px/s)
+pub const SPD_ALMOST_STOP: f64 =  30.0;
+pub const SPD_VERY_SLOW:   f64 =  60.0;
+pub const SPD_SLOW:        f64 = 100.0;
+pub const SPD_NORMAL:      f64 = 150.0;
+pub const SPD_FAST:        f64 = 200.0;
 
-// Safe following gap (px)
-pub const GAP:       f64 = VH * 2.5;   // ~120 px
-pub const STOP_GAP:  f64 = VH * 1.2;   // ~58 px
+// ── Hitbox projection sizes ── (Golden76z exact values, px ahead of vehicle)
+pub const HB_BIG:        f64 = 400.0;
+pub const HB_MEDIUM:     f64 = 300.0;
+pub const HB_SMALL:      f64 = 225.0;
+pub const HB_VERY_SMALL: f64 = 100.0;
+pub const HB_ALMOST_STOP: f64 = 51.0;
+pub const HB_STOP:       f64 =  50.0;  // 1px smaller than ALMOST_STOP
+                                        // if even this overlaps = truly blocked
 
-// ── Hitbox projection sizes (Golden76z-style, in px ahead of vehicle front)
-// The car projects a rectangle this many px ahead. We try each size in order;
-// if it overlaps another car we shrink it. The size that fits sets the speed.
-pub const HB_BIG:        f64 = 260.0;  // → SPD_FAST  (clear road)
-pub const HB_MEDIUM:     f64 = 160.0;  // → SPD_FAST  (comfortable)
-pub const HB_SMALL:      f64 =  90.0;  // → SPD_MED   (cautious)
-pub const HB_VERY_SMALL: f64 =  55.0;  // → SPD_SLOW  (close)
-pub const HB_STOP:       f64 =  20.0;  // → SPD_SLOW  (almost stopped)
+// Half-width of the forward hitbox rectangle
+pub const HB_HALF_W: f64 = VW * 0.5;
 
-// Half-width of the forward hitbox (slightly wider than car for safety)
-pub const HB_HALF_W: f64 = VW * 0.6;
+// Same-lane following safe gap = 4 * vehicle width (Golden76z: SAFE_DISTANCE)
+pub const SAFE_DISTANCE: f64 = 4.0 * VW; // 240px
+pub const STOP_GAP:      f64 = VW * 1.0; // 60px  — hard stop threshold
 
-// Sensor cone (for rendering)
-pub const SENSOR_HALF_W: f64 = VW * 0.7;
-pub const SENSOR_RANGE:  f64 = HB_BIG;
+// ── Velocity cooldown (Golden76z: VELOCITY_COOLDOWN = 20ms) ──
+// Speed may only change once per this interval per vehicle.
+// Prevents per-frame flicker that allows cars to phase through each other.
+pub const VELOCITY_COOLDOWN: Duration = Duration::from_millis(20);
 
-// Conflict / priority thresholds
-pub const NEAR_BOX_DIST:  f64 = 180.0;
-pub const CONFLICT_DIST:  f64 = TILE * 1.3;
-pub const PRIORITY_DIST:  f64 = 300.0;
+// Spawn gap: minimum distance between same-lane cars at spawn
+pub const SPAWN_GAP: f64 = SAFE_DISTANCE * 2.0;
 
-// Crash threshold
-pub const CRASH_DIST: f64 = VH * 0.85;
+// Crash threshold (used only for stats, not for stopping)
+pub const CRASH_DIST: f64 = VH * 0.7;
 
-// Off-screen spawn/despawn margin
+// Off-screen exit margin
 pub const OFF: f64 = 80.0;
 
-// Timers
+// Input cooldowns
 pub const KEY_CD:  Duration = Duration::from_millis(400);
-pub const RAND_CD: Duration = Duration::from_millis(550);
+pub const RAND_CD: Duration = Duration::from_millis(1200); // Golden76z SPAWN_COOLDOWN
 
-// ── Colours ────────────────────────────────────────────────────────────────
+// Intersection box bounds
+pub const IX_L: f64 = IX;
+pub const IX_R: f64 = IX + ROAD;
+pub const IX_T: f64 = IY;
+pub const IX_B: f64 = IY + ROAD;
+
+// Sensor / conflict ranges
+pub const SENSOR_RANGE: f64 = HB_BIG + VH;
+pub const CONFLICT_DIST: f64 = TILE * 1.5;
+
+// ── Colours ──
 pub const C_GRASS:  (u8,u8,u8) = (22, 78, 22);
 pub const C_ROAD:   (u8,u8,u8) = (38, 38, 38);
 pub const C_INTER:  (u8,u8,u8) = (48, 48, 48);
