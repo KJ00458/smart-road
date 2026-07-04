@@ -7,7 +7,7 @@ use sdl2::video::{Window, WindowContext};
 use crate::config::*;
 use crate::intersection::World;
 use crate::stats::Statistics;
-use crate::vehicle::{Vehicle, Phase, Spd};
+use crate::vehicle::{Vehicle, Phase};
 
 const COLORS: [(u8,u8,u8);8] = [
     (210,55,55),(55,145,220),(55,200,90),(240,175,30),
@@ -18,6 +18,11 @@ const HUD_X:  i32 = (WINDOW_W - HUD_W - 10) as i32;
 const HUD_Y:  i32 = 10;
 const LINE_H: i32 = 21;
 const PAD:    i32 = 10;
+
+// Sensor beam half-width for rendering (matches hitbox half-width)
+const SENSOR_HALF_W: f64 = HB_HALF_W;
+// Length of rendered sensor cone (matches biggest hitbox)
+const SENSOR_LEN: f64 = HB_BIG;
 
 pub struct Renderer<'f,'tc> {
     canvas: Canvas<Window>,
@@ -94,7 +99,7 @@ impl<'f,'tc> Renderer<'f,'tc> {
         let (fx, fy) = (a.cos(), a.sin());
         let (px, py) = (-fy, fx);
         let hw  = SENSOR_HALF_W;
-        let len = v.sensor_range;
+        let len = SENSOR_LEN;
         let front_x = v.x + fx * (VH / 2.0);
         let front_y = v.y + fy * (VH / 2.0);
 
@@ -104,11 +109,13 @@ impl<'f,'tc> Renderer<'f,'tc> {
         let br = (front_x + fx*len + px*hw, front_y + fy*len + py*hw); // far-right
         let bl = (front_x + fx*len - px*hw, front_y + fy*len - py*hw); // far-left
 
-        // Color by speed state
-        let beam_col = match v.spd {
-            Spd::Fast => Color::RGBA(  0, 200, 255, 180),
-            Spd::Med  => Color::RGBA(255, 195,   0, 180),
-            Spd::Slow => Color::RGBA(255,  50,  50, 180),
+        // Color by speed: fast=blue, mid=yellow, slow/stopped=red
+        let beam_col = if v.spd_px >= SPD_NORMAL {
+            Color::RGBA(  0, 200, 255, 180)  // fast  — cyan
+        } else if v.spd_px >= SPD_SLOW {
+            Color::RGBA(255, 195,   0, 180)  // medium — amber
+        } else {
+            Color::RGBA(255,  50,  50, 180)  // slow/stopped — red
         };
         self.canvas.set_draw_color(beam_col);
 
@@ -149,11 +156,11 @@ impl<'f,'tc> Renderer<'f,'tc> {
             let (dx,dy)=rot(*sx,-hh+4.0,a);
             self.canvas.fill_rect(Rect::new((v.x+dx-3.0) as i32,(v.y+dy-3.0) as i32,6,6)).ok();
         }
-        // brake lights — bright red when braking
-        let tl_col = if v.spd == Spd::Slow || v.spd == Spd::Med {
-            Color::RGB(255,20,20)
+        // brake lights — bright red when slow or stopped
+        let tl_col = if v.spd_px < SPD_NORMAL {
+            Color::RGB(255, 20, 20)
         } else {
-            Color::RGB(110,10,10)
+            Color::RGB(110, 10, 10)
         };
         self.canvas.set_draw_color(tl_col);
         for sx in &[-hw*0.5, hw*0.5] {
@@ -188,10 +195,8 @@ impl<'f,'tc> Renderer<'f,'tc> {
             ("  [ESC]   Stats & quit".into(),                   c(C_HUD_DIM)),
         ];
         let box_h = lines.len() as i32 * LINE_H + PAD*2;
-        // Dark panel
         self.canvas.set_draw_color(Color::RGBA(C_HUD_BG.0,C_HUD_BG.1,C_HUD_BG.2,C_HUD_BG.3));
         self.canvas.fill_rect(Rect::new(HUD_X,HUD_Y,HUD_W,box_h as u32)).ok();
-        // Border
         self.canvas.set_draw_color(Color::RGB(40,65,105));
         self.canvas.draw_rect(Rect::new(HUD_X,HUD_Y,HUD_W,box_h as u32)).ok();
         let mut ty = HUD_Y + PAD;
@@ -249,7 +254,7 @@ impl<'f,'tc> Renderer<'f,'tc> {
     }
 }
 
-/// Draw a dotted line between two points (dot_len pixels on, gap_len pixels off).
+/// Draw a dotted line between two points.
 fn dot_line(
     canvas: &mut Canvas<Window>,
     (x0,y0): (f64,f64),
@@ -257,7 +262,7 @@ fn dot_line(
     dot_len: i32,
     gap_len: i32,
 ) {
-    let dx = x1 - x0; let dy = y1 - y0;
+    let dx = x1-x0; let dy = y1-y0;
     let total = (dx*dx+dy*dy).sqrt();
     if total < 1.0 { return; }
     let ux = dx/total; let uy = dy/total;
@@ -265,8 +270,8 @@ fn dot_line(
     let mut t = 0.0f64;
     while t < total {
         let t_end = (t + dot_len as f64).min(total);
-        let ax = (x0 + ux*t)   as i32;
-        let ay = (y0 + uy*t)   as i32;
+        let ax = (x0 + ux*t)     as i32;
+        let ay = (y0 + uy*t)     as i32;
         let bx = (x0 + ux*t_end) as i32;
         let by = (y0 + uy*t_end) as i32;
         canvas.draw_line(sdl2::rect::Point::new(ax,ay), sdl2::rect::Point::new(bx,by)).ok();
