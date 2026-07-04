@@ -6,6 +6,7 @@ use sdl2::video::{Window, WindowContext};
 
 use crate::config::*;
 use crate::intersection::World;
+use crate::main::SelArm;
 use crate::stats::Statistics;
 use crate::vehicle::{Vehicle, Phase};
 
@@ -13,16 +14,14 @@ const COLORS: [(u8,u8,u8);8] = [
     (210,55,55),(55,145,220),(55,200,90),(240,175,30),
     (175,70,215),(235,115,40),(40,215,215),(215,215,215),
 ];
-const HUD_W:  u32 = 255;
+const HUD_W:  u32 = 270;
 const HUD_X:  i32 = (WINDOW_W - HUD_W - 10) as i32;
 const HUD_Y:  i32 = 10;
 const LINE_H: i32 = 21;
 const PAD:    i32 = 10;
 
-// Sensor beam half-width for rendering (matches hitbox half-width)
 const SENSOR_HALF_W: f64 = HB_HALF_W;
-// Length of rendered sensor cone (matches biggest hitbox)
-const SENSOR_LEN: f64 = HB_BIG;
+const SENSOR_LEN:    f64 = HB_BIG;
 
 pub struct Renderer<'f,'tc> {
     canvas: Canvas<Window>,
@@ -43,14 +42,15 @@ impl<'f,'tc> Renderer<'f,'tc> {
         }
     }
 
-    pub fn draw(&mut self, world: &World, stats: &Statistics, rng: bool) {
+    pub fn draw(&mut self, world: &World, stats: &Statistics,
+                rng: bool, manual: bool, sel: SelArm) {
         self.canvas.set_draw_color(col(C_GRASS));
         self.canvas.clear();
         self.road();
         self.lane_marks();
         for v in &world.vehicles { self.sensor_beam(v); }
         for v in &world.vehicles { self.vehicle(v); }
-        self.hud(stats, world.vehicles.len(), rng);
+        self.hud(stats, world.vehicles.len(), rng, manual, sel);
         self.canvas.present();
     }
 
@@ -85,64 +85,48 @@ impl<'f,'tc> Renderer<'f,'tc> {
 
     fn dv(&mut self, x:i32, y0:i32, y1:i32, d:i32, g:i32) {
         let mut y=y0; while y<y1 { let e=(y+d).min(y1);
-            self.canvas.fill_rect(Rect::new(x-1,y,2,(e-y) as u32)).ok(); y+=d+g; }
-    }
+            self.canvas.fill_rect(Rect::new(x-1,y,2,(e-y) as u32)).ok(); y+=d+g; } }
     fn dh(&mut self, y:i32, x0:i32, x1:i32, d:i32, g:i32) {
         let mut x=x0; while x<x1 { let e=(x+d).min(x1);
-            self.canvas.fill_rect(Rect::new(x,y-1,(e-x) as u32,2)).ok(); x+=d+g; }
-    }
+            self.canvas.fill_rect(Rect::new(x,y-1,(e-x) as u32,2)).ok(); x+=d+g; } }
 
-    /// Draw dotted border outline of the sensor cone (no fill).
     fn sensor_beam(&mut self, v: &Vehicle) {
         if v.phase == Phase::Exiting { return; }
-        let a   = v.angle();
-        let (fx, fy) = (a.cos(), a.sin());
-        let (px, py) = (-fy, fx);
+        let a = v.angle();
+        let (fx,fy) = (a.cos(), a.sin());
+        let (px,py) = (-fy, fx);
         let hw  = SENSOR_HALF_W;
         let len = SENSOR_LEN;
-        let front_x = v.x + fx * (VH / 2.0);
-        let front_y = v.y + fy * (VH / 2.0);
-
-        // 4 corners of the cone rectangle
-        let tl = (front_x - px*hw, front_y - py*hw);  // near-left
-        let tr = (front_x + px*hw, front_y + py*hw);  // near-right
-        let br = (front_x + fx*len + px*hw, front_y + fy*len + py*hw); // far-right
-        let bl = (front_x + fx*len - px*hw, front_y + fy*len - py*hw); // far-left
-
-        // Color by speed: fast=blue, mid=yellow, slow/stopped=red
+        let front_x = v.x + fx*(VH/2.0);
+        let front_y = v.y + fy*(VH/2.0);
+        let tl = (front_x - px*hw, front_y - py*hw);
+        let tr = (front_x + px*hw, front_y + py*hw);
+        let br = (front_x + fx*len + px*hw, front_y + fy*len + py*hw);
+        let bl = (front_x + fx*len - px*hw, front_y + fy*len - py*hw);
         let beam_col = if v.spd_px >= SPD_NORMAL {
-            Color::RGBA(  0, 200, 255, 180)  // fast  — cyan
+            Color::RGBA(  0, 200, 255, 180)
         } else if v.spd_px >= SPD_SLOW {
-            Color::RGBA(255, 195,   0, 180)  // medium — amber
+            Color::RGBA(255, 195,   0, 180)
         } else {
-            Color::RGBA(255,  50,  50, 180)  // slow/stopped — red
+            Color::RGBA(255,  50,  50, 180)
         };
         self.canvas.set_draw_color(beam_col);
-
-        // Draw dotted lines along each edge of the rectangle
-        dot_line(&mut self.canvas, tl, tr, 5, 4);  // near edge
-        dot_line(&mut self.canvas, bl, br, 5, 4);  // far edge
-        dot_line(&mut self.canvas, tl, bl, 5, 4);  // left side
-        dot_line(&mut self.canvas, tr, br, 5, 4);  // right side
+        dot_line(&mut self.canvas, tl, tr, 5, 4);
+        dot_line(&mut self.canvas, bl, br, 5, 4);
+        dot_line(&mut self.canvas, tl, bl, 5, 4);
+        dot_line(&mut self.canvas, tr, br, 5, 4);
     }
 
     fn vehicle(&mut self, v: &Vehicle) {
-        // If crashed, tint dark red
-        let base = if v.crashed {
-            (180u8, 20u8, 20u8)
-        } else {
-            COLORS[v.color % 8]
-        };
+        let base = if v.crashed { (180u8,20u8,20u8) } else { COLORS[v.color%8] };
         let (r,g,b) = base;
         let a  = v.angle();
-        let hw = VW/2.0;
-        let hh = VH/2.0;
+        let hw = VW/2.0; let hh = VH/2.0;
         let corners = [rot(-hw,-hh,a),rot(hw,-hh,a),rot(hw,hh,a),rot(-hw,hh,a)];
         let pts: Vec<sdl2::rect::Point> = corners.iter()
-            .map(|(dx,dy)| spt(v.x+dx, v.y+dy)).collect();
+            .map(|(dx,dy)| spt(v.x+dx,v.y+dy)).collect();
         self.canvas.set_draw_color(Color::RGB(r,g,b));
         fill_poly(&mut self.canvas, &pts);
-        // windscreen
         let wr=0.55; let fo=-hh*0.4; let ws=hh*0.3;
         let wp: Vec<sdl2::rect::Point> = [
             rot(-hw*wr,fo-ws,a),rot(hw*wr,fo-ws,a),rot(hw*wr,fo,a),rot(-hw*wr,fo,a),
@@ -150,18 +134,12 @@ impl<'f,'tc> Renderer<'f,'tc> {
         self.canvas.set_draw_color(Color::RGB(
             (r as u16*5/10) as u8,(g as u16*5/10) as u8,(b as u16*5/10) as u8));
         fill_poly(&mut self.canvas, &wp);
-        // headlights
         self.canvas.set_draw_color(Color::RGB(255,255,180));
         for sx in &[-hw*0.5, hw*0.5] {
             let (dx,dy)=rot(*sx,-hh+4.0,a);
             self.canvas.fill_rect(Rect::new((v.x+dx-3.0) as i32,(v.y+dy-3.0) as i32,6,6)).ok();
         }
-        // brake lights — bright red when slow or stopped
-        let tl_col = if v.spd_px < SPD_NORMAL {
-            Color::RGB(255, 20, 20)
-        } else {
-            Color::RGB(110, 10, 10)
-        };
+        let tl_col = if v.spd_px < SPD_NORMAL { Color::RGB(255,20,20) } else { Color::RGB(110,10,10) };
         self.canvas.set_draw_color(tl_col);
         for sx in &[-hw*0.5, hw*0.5] {
             let (dx,dy)=rot(*sx,hh-4.0,a);
@@ -169,31 +147,77 @@ impl<'f,'tc> Renderer<'f,'tc> {
         }
     }
 
-    fn hud(&mut self, s: &Statistics, on: usize, rng: bool) {
-        let div = "─────────────────────────";
-        let lines: Vec<(String,Color)> = vec![
-            ("◈  SMART ROAD".into(),                              c(C_HUD_TITLE)),
-            (div.into(),                                          c(C_HUD_DIM)),
-            (format!("Passed      {:>6}",  s.total_passed),      c(C_HUD_VAL)),
-            (format!("On screen   {:>6}",  on),                  Color::WHITE),
+    fn hud(&mut self, s: &Statistics, on: usize,
+           rng: bool, manual: bool, sel: SelArm) {
+        let div = "───────────────────────────";
+
+        // Mode label
+        let mode_str = if manual { "MANUAL" } else if rng { "AUTO" } else { "IDLE" };
+        let mode_col = if manual { Color::RGB(255,200,0) } else if rng { c(C_HUD_ON) } else { c(C_HUD_DIM) };
+
+        // Selected arm indicator
+        let arm_str = match sel {
+            SelArm::North => "↑ NORTH selected",
+            SelArm::South => "↓ SOUTH selected",
+            SelArm::East  => "→ EAST  selected",
+            SelArm::West  => "← WEST  selected",
+            SelArm::None  => "  (no arm chosen)",
+        };
+        let arm_col = if sel == SelArm::None { c(C_HUD_DIM) } else { Color::RGB(255,230,80) };
+
+        let mut lines: Vec<(String,Color)> = vec![
+            ("◈  SMART ROAD".into(),                            c(C_HUD_TITLE)),
+            (div.into(),                                        c(C_HUD_DIM)),
+            // Stats
+            (format!("Passed      {:>6}",  s.total_passed),    c(C_HUD_VAL)),
+            (format!("On screen   {:>6}",  on),                Color::WHITE),
             (format!("Crashes     {:>6}",  s.crashes),
                 if s.crashes>0 {c(C_HUD_CRASH)} else {c(C_HUD_VAL)}),
-            (format!("Close calls {:>6}",  s.close_calls / 60),
+            (format!("Close calls {:>6}",  s.close_calls/60),
                 if s.close_calls>60 {c(C_HUD_WARN)} else {c(C_HUD_VAL)}),
-            (div.into(),                                          c(C_HUD_DIM)),
-            (format!("Max spd {:>8.1} px/s", s.max_spd),        c(C_HUD_VAL)),
-            (format!("Min spd {:>8.1} px/s", s.min_spd_d()),    Color::WHITE),
-            (format!("Avg spd {:>8.1} px/s", s.avg_spd()),      Color::WHITE),
-            (div.into(),                                          c(C_HUD_DIM)),
-            (format!("Max transit {:>6.2}s", s.max_time),       c(C_HUD_VAL)),
-            (format!("Min transit {:>6.2}s", s.min_time_d()),   Color::WHITE),
-            (div.into(),                                          c(C_HUD_DIM)),
-            ("  CONTROLS".into(),                               Color::RGB(170,170,215)),
-            (format!("  [R] Auto  {}", if rng{"ON "}else{"OFF"}),
-                if rng{c(C_HUD_ON)}else{c(C_HUD_OFF)}),
-            ("  [↑↓←→] Spawn car".into(),                       Color::WHITE),
-            ("  [ESC]   Stats & quit".into(),                   c(C_HUD_DIM)),
+            (div.into(),                                        c(C_HUD_DIM)),
+            (format!("Max spd {:>7.1} px/s", s.max_spd),      c(C_HUD_VAL)),
+            (format!("Min spd {:>7.1} px/s", s.min_spd_d()),  Color::WHITE),
+            (format!("Avg spd {:>7.1} px/s", s.avg_spd()),    Color::WHITE),
+            (div.into(),                                        c(C_HUD_DIM)),
+            (format!("Max transit {:>5.2}s", s.max_time),     c(C_HUD_VAL)),
+            (format!("Min transit {:>5.2}s", s.min_time_d()), Color::WHITE),
+            (div.into(),                                        c(C_HUD_DIM)),
+            // Mode
+            (format!("Mode: {}", mode_str),                    mode_col),
         ];
+
+        // Only show arm selector line in manual mode
+        if manual {
+            lines.push((arm_str.into(), arm_col));
+        }
+
+        lines.push((div.into(), c(C_HUD_DIM)));
+
+        // Controls section
+        lines.push(("  CONTROLS".into(), Color::RGB(170,170,215)));
+        lines.push(("  [R]  Auto mode".into(),          c(C_HUD_DIM)));
+        lines.push(("  [M]  Manual mode".into(),        c(C_HUD_DIM)));
+        lines.push(("  [ESC] Stats & quit".into(),      c(C_HUD_DIM)));
+        lines.push((div.into(),                         c(C_HUD_DIM)));
+
+        if manual {
+            lines.push(("  MANUAL SPAWN".into(),            Color::RGB(255,200,0)));
+            lines.push(("  Step 1: Arrow key".into(),       Color::WHITE));
+            lines.push(("    ↑↓←→ = pick arm (N/S/W/E)".into(), Color::WHITE));
+            lines.push(("  Step 2: Number key".into(),      Color::WHITE));
+            lines.push(("    [1] = Turn right".into(),      Color::WHITE));
+            lines.push(("    [2] = Straight".into(),        Color::WHITE));
+            lines.push(("    [3] = Turn left".into(),       Color::WHITE));
+        } else {
+            lines.push(("  AUTO SPAWN".into(),              Color::RGB(80,245,140)));
+            lines.push(("  Arrow keys spawn a random".into(), Color::WHITE));
+            lines.push(("  car from that direction.".into(), Color::WHITE));
+            lines.push(("".into(),                          Color::WHITE));
+            lines.push(("  Switch to [M]anual to".into(),   c(C_HUD_DIM)));
+            lines.push(("  choose the turn type.".into(),   c(C_HUD_DIM)));
+        }
+
         let box_h = lines.len() as i32 * LINE_H + PAD*2;
         self.canvas.set_draw_color(Color::RGBA(C_HUD_BG.0,C_HUD_BG.1,C_HUD_BG.2,C_HUD_BG.3));
         self.canvas.fill_rect(Rect::new(HUD_X,HUD_Y,HUD_W,box_h as u32)).ok();
@@ -214,23 +238,23 @@ impl<'f,'tc> Renderer<'f,'tc> {
     pub fn show_stats(&mut self, s: &Statistics) {
         let div = "────────────────────────────────────────────";
         let lines: Vec<(String,Color)> = vec![
-            ("SMART ROAD — STATISTICS".into(),               c(C_HUD_TITLE)),
-            (div.into(),                                      Color::WHITE),
-            (format!("Vehicles passed   {}", s.total_passed), c(C_HUD_VAL)),
+            ("SMART ROAD — STATISTICS".into(),                c(C_HUD_TITLE)),
+            (div.into(),                                       Color::WHITE),
+            (format!("Vehicles passed   {}",  s.total_passed), c(C_HUD_VAL)),
             (format!("Session           {:.1}s",s.session_secs()), Color::WHITE),
-            (div.into(),                                      Color::WHITE),
-            (format!("Crashes           {}", s.crashes),
+            (div.into(),                                       Color::WHITE),
+            (format!("Crashes           {}",  s.crashes),
                 if s.crashes>0{c(C_HUD_CRASH)}else{c(C_HUD_VAL)}),
-            (format!("Close calls       {}", s.close_calls/60), c(C_HUD_WARN)),
-            (div.into(),                                      Color::WHITE),
-            (format!("Max velocity      {:.1} px/s",s.max_spd), c(C_HUD_VAL)),
+            (format!("Close calls       {}",  s.close_calls/60), c(C_HUD_WARN)),
+            (div.into(),                                       Color::WHITE),
+            (format!("Max velocity      {:.1} px/s",s.max_spd),   c(C_HUD_VAL)),
             (format!("Min velocity      {:.1} px/s",s.min_spd_d()),Color::WHITE),
-            (format!("Avg velocity      {:.1} px/s",s.avg_spd()),Color::WHITE),
-            (div.into(),                                      Color::WHITE),
-            (format!("Max transit       {:.2}s",s.max_time), c(C_HUD_VAL)),
+            (format!("Avg velocity      {:.1} px/s",s.avg_spd()), Color::WHITE),
+            (div.into(),                                       Color::WHITE),
+            (format!("Max transit       {:.2}s",s.max_time),   c(C_HUD_VAL)),
             (format!("Min transit       {:.2}s",s.min_time_d()),Color::WHITE),
-            (div.into(),                                      Color::WHITE),
-            ("(closes in 3s)".into(),                        c(C_HUD_DIM)),
+            (div.into(),                                       Color::WHITE),
+            ("(closes in 3s)".into(),                         c(C_HUD_DIM)),
         ];
         for _frame in 0..180u32 {
             self.canvas.set_draw_color(Color::RGB(8,8,18));
@@ -254,28 +278,19 @@ impl<'f,'tc> Renderer<'f,'tc> {
     }
 }
 
-/// Draw a dotted line between two points.
-fn dot_line(
-    canvas: &mut Canvas<Window>,
-    (x0,y0): (f64,f64),
-    (x1,y1): (f64,f64),
-    dot_len: i32,
-    gap_len: i32,
-) {
-    let dx = x1-x0; let dy = y1-y0;
-    let total = (dx*dx+dy*dy).sqrt();
-    if total < 1.0 { return; }
-    let ux = dx/total; let uy = dy/total;
-    let step = (dot_len + gap_len) as f64;
-    let mut t = 0.0f64;
-    while t < total {
-        let t_end = (t + dot_len as f64).min(total);
-        let ax = (x0 + ux*t)     as i32;
-        let ay = (y0 + uy*t)     as i32;
-        let bx = (x0 + ux*t_end) as i32;
-        let by = (y0 + uy*t_end) as i32;
-        canvas.draw_line(sdl2::rect::Point::new(ax,ay), sdl2::rect::Point::new(bx,by)).ok();
-        t += step;
+fn dot_line(canvas: &mut Canvas<Window>, (x0,y0):(f64,f64), (x1,y1):(f64,f64), dot_len:i32, gap_len:i32) {
+    let dx=x1-x0; let dy=y1-y0;
+    let total=(dx*dx+dy*dy).sqrt();
+    if total<1.0{return;}
+    let ux=dx/total; let uy=dy/total;
+    let step=(dot_len+gap_len) as f64;
+    let mut t=0.0f64;
+    while t<total {
+        let t_end=(t+dot_len as f64).min(total);
+        let ax=(x0+ux*t) as i32; let ay=(y0+uy*t) as i32;
+        let bx=(x0+ux*t_end) as i32; let by=(y0+uy*t_end) as i32;
+        canvas.draw_line(sdl2::rect::Point::new(ax,ay),sdl2::rect::Point::new(bx,by)).ok();
+        t+=step;
     }
 }
 
