@@ -63,36 +63,37 @@ impl World {
         });
         self.total_passed = stats.total_passed;
 
-        // ── 5. Crash detection (replaces close-call logic) ─────────────────
+        // ── 5. Crash & close-call detection ───────────────────────────────
+        // Collect crash pairs first into a plain Vec without holding borrows.
         let n = self.vehicles.len();
+        let mut crash_pairs: Vec<(usize, usize)> = Vec::new();
+
         for i in 0..n {
             for j in (i+1)..n {
-                let a = &self.vehicles[i];
-                let b = &self.vehicles[j];
-                if a.arm == b.arm && a.turn == b.turn { continue; }
-                let d = dist(a.x,a.y,b.x,b.y);
-                // Close-call: within 1.5x vehicle height from different paths
+                let ax = self.vehicles[i].x; let ay = self.vehicles[i].y;
+                let bx = self.vehicles[j].x; let by = self.vehicles[j].y;
+                let ai = self.vehicles[i].arm; let at = self.vehicles[i].turn;
+                let bi = self.vehicles[j].arm; let bt = self.vehicles[j].turn;
+                let ac = self.vehicles[i].crashed;
+                let bc = self.vehicles[j].crashed;
+
+                if ai == bi && at == bt { continue; }
+                let d = dist(ax,ay,bx,by);
+
                 if d < VH * 1.5 && d > 1.0 {
                     stats.close_calls += 1;
                 }
-                // Crash: overlap threshold
                 if d < CRASH_DIST {
-                    // Only count once per pair contact
-                    if !a.crashed && !b.crashed {
+                    if !ac && !bc {
                         stats.crashes += 1;
                     }
+                    crash_pairs.push((i, j));
                 }
             }
         }
-        // Mark crashed vehicles
-        let crashes: Vec<(usize,usize)> = (0..n).flat_map(|i| {
-            ((i+1)..n).filter_map(move |j| {
-                let a = &self.vehicles[i]; let b = &self.vehicles[j];
-                if a.arm == b.arm && a.turn == b.turn { return None; }
-                if dist(a.x,a.y,b.x,b.y) < CRASH_DIST { Some((i,j)) } else { None }
-            }).collect::<Vec<_>>()
-        }).collect();
-        for (i,j) in crashes {
+
+        // Now mark crashed vehicles (no borrows alive from the loop above)
+        for (i, j) in crash_pairs {
             self.vehicles[i].crashed = true;
             self.vehicles[j].crashed = true;
         }
@@ -129,15 +130,15 @@ fn decide_speed(
         let intruder = snap.iter().find(|s| {
             if s.0 == v.id { return false; }
             if !paths_conflict(v.arm, v.turn, s.1, s.2) { return false; }
-            let fwd  = v.forward_dist_to(s.4, s.5);
-            let lat  = v.lateral_offset_to(s.4, s.5).abs();
-            let close = dist(v.x,v.y,s.4,s.5) < PRIORITY_DIST;
+            let fwd   = v.forward_dist_to(s.4, s.5);
+            let lat   = v.lateral_offset_to(s.4, s.5).abs();
+            let close = dist(v.x, v.y, s.4, s.5) < PRIORITY_DIST;
             let in_cone = fwd > -VH && fwd < v.sensor_range && lat < SENSOR_HALF_W * 3.0;
             close && (in_cone || s.3 == Phase::Crossing)
         });
         if let Some(other) = intruder {
             if v.priority > other.6 {
-                let d = dist(v.x,v.y,other.4,other.5);
+                let d = dist(v.x, v.y, other.4, other.5);
                 return if d < PRIORITY_DIST * 0.5 { Spd::Slow } else { Spd::Med };
             }
         }
@@ -151,6 +152,6 @@ fn in_box(x: f64, y: f64) -> bool {
     x >= IX_BOX_L && x <= IX_BOX_R && y >= IX_BOX_T && y <= IX_BOX_B
 }
 #[inline]
-fn dist(ax:f64,ay:f64,bx:f64,by:f64)->f64{
+fn dist(ax: f64, ay: f64, bx: f64, by: f64) -> f64 {
     ((ax-bx)*(ax-bx)+(ay-by)*(ay-by)).sqrt()
 }
