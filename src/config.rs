@@ -21,22 +21,31 @@ pub const SPD_MED:    f64 =  70.0;
 pub const SPD_FAST:   f64 = 130.0;
 
 // Safe following gap (px)
-pub const GAP:       f64 = VH * 2.8;   // ~134 px
-pub const STOP_GAP:  f64 = VH * 1.3;   // ~62 px
+pub const GAP:       f64 = VH * 2.5;   // ~120 px
+pub const STOP_GAP:  f64 = VH * 1.2;   // ~58 px
 
-// Sensor cone — scans the road ahead along the car's path
+// ── Hitbox projection sizes (Golden76z-style, in px ahead of vehicle front)
+// The car projects a rectangle this many px ahead. We try each size in order;
+// if it overlaps another car we shrink it. The size that fits sets the speed.
+pub const HB_BIG:        f64 = 260.0;  // → SPD_FAST  (clear road)
+pub const HB_MEDIUM:     f64 = 160.0;  // → SPD_FAST  (comfortable)
+pub const HB_SMALL:      f64 =  90.0;  // → SPD_MED   (cautious)
+pub const HB_VERY_SMALL: f64 =  55.0;  // → SPD_SLOW  (close)
+pub const HB_STOP:       f64 =  20.0;  // → SPD_SLOW  (almost stopped)
+
+// Half-width of the forward hitbox (slightly wider than car for safety)
+pub const HB_HALF_W: f64 = VW * 0.6;
+
+// Sensor cone (for rendering)
 pub const SENSOR_HALF_W: f64 = VW * 0.7;
-pub const SENSOR_RANGE:  f64 = 280.0;
+pub const SENSOR_RANGE:  f64 = HB_BIG;
 
 // Conflict / priority thresholds
-// A car is "near the box" when it is within this many px of the intersection
 pub const NEAR_BOX_DIST:  f64 = 180.0;
-// Two conflicting paths are considered to clash if their waypoints are this close
 pub const CONFLICT_DIST:  f64 = TILE * 1.3;
-// We apply priority logic when the other car is this close
 pub const PRIORITY_DIST:  f64 = 300.0;
 
-// Crash threshold: two vehicles this close = crash
+// Crash threshold
 pub const CRASH_DIST: f64 = VH * 0.85;
 
 // Off-screen spawn/despawn margin
