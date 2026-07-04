@@ -6,7 +6,6 @@ use sdl2::video::{Window, WindowContext};
 
 use crate::config::*;
 use crate::intersection::World;
-use crate::main::SelArm;
 use crate::stats::Statistics;
 use crate::vehicle::{Vehicle, Phase};
 
@@ -151,11 +150,9 @@ impl<'f,'tc> Renderer<'f,'tc> {
            rng: bool, manual: bool, sel: SelArm) {
         let div = "───────────────────────────";
 
-        // Mode label
         let mode_str = if manual { "MANUAL" } else if rng { "AUTO" } else { "IDLE" };
         let mode_col = if manual { Color::RGB(255,200,0) } else if rng { c(C_HUD_ON) } else { c(C_HUD_DIM) };
 
-        // Selected arm indicator
         let arm_str = match sel {
             SelArm::North => "↑ NORTH selected",
             SelArm::South => "↓ SOUTH selected",
@@ -168,7 +165,6 @@ impl<'f,'tc> Renderer<'f,'tc> {
         let mut lines: Vec<(String,Color)> = vec![
             ("◈  SMART ROAD".into(),                            c(C_HUD_TITLE)),
             (div.into(),                                        c(C_HUD_DIM)),
-            // Stats
             (format!("Passed      {:>6}",  s.total_passed),    c(C_HUD_VAL)),
             (format!("On screen   {:>6}",  on),                Color::WHITE),
             (format!("Crashes     {:>6}",  s.crashes),
@@ -183,39 +179,35 @@ impl<'f,'tc> Renderer<'f,'tc> {
             (format!("Max transit {:>5.2}s", s.max_time),     c(C_HUD_VAL)),
             (format!("Min transit {:>5.2}s", s.min_time_d()), Color::WHITE),
             (div.into(),                                        c(C_HUD_DIM)),
-            // Mode
             (format!("Mode: {}", mode_str),                    mode_col),
         ];
 
-        // Only show arm selector line in manual mode
         if manual {
             lines.push((arm_str.into(), arm_col));
         }
 
         lines.push((div.into(), c(C_HUD_DIM)));
-
-        // Controls section
         lines.push(("  CONTROLS".into(), Color::RGB(170,170,215)));
-        lines.push(("  [R]  Auto mode".into(),          c(C_HUD_DIM)));
-        lines.push(("  [M]  Manual mode".into(),        c(C_HUD_DIM)));
-        lines.push(("  [ESC] Stats & quit".into(),      c(C_HUD_DIM)));
-        lines.push((div.into(),                         c(C_HUD_DIM)));
+        lines.push(("  [R]  Auto mode".into(),     c(C_HUD_DIM)));
+        lines.push(("  [M]  Manual mode".into(),   c(C_HUD_DIM)));
+        lines.push(("  [ESC] Stats & quit".into(), c(C_HUD_DIM)));
+        lines.push((div.into(), c(C_HUD_DIM)));
 
         if manual {
-            lines.push(("  MANUAL SPAWN".into(),            Color::RGB(255,200,0)));
-            lines.push(("  Step 1: Arrow key".into(),       Color::WHITE));
+            lines.push(("  MANUAL SPAWN".into(),               Color::RGB(255,200,0)));
+            lines.push(("  Step 1: Arrow key".into(),          Color::WHITE));
             lines.push(("    ↑↓←→ = pick arm (N/S/W/E)".into(), Color::WHITE));
-            lines.push(("  Step 2: Number key".into(),      Color::WHITE));
-            lines.push(("    [1] = Turn right".into(),      Color::WHITE));
-            lines.push(("    [2] = Straight".into(),        Color::WHITE));
-            lines.push(("    [3] = Turn left".into(),       Color::WHITE));
+            lines.push(("  Step 2: Number key".into(),         Color::WHITE));
+            lines.push(("    [1] = Turn right".into(),         Color::WHITE));
+            lines.push(("    [2] = Straight".into(),           Color::WHITE));
+            lines.push(("    [3] = Turn left".into(),          Color::WHITE));
         } else {
-            lines.push(("  AUTO SPAWN".into(),              Color::RGB(80,245,140)));
-            lines.push(("  Arrow keys spawn a random".into(), Color::WHITE));
-            lines.push(("  car from that direction.".into(), Color::WHITE));
-            lines.push(("".into(),                          Color::WHITE));
-            lines.push(("  Switch to [M]anual to".into(),   c(C_HUD_DIM)));
-            lines.push(("  choose the turn type.".into(),   c(C_HUD_DIM)));
+            lines.push(("  AUTO SPAWN".into(),                  c(C_HUD_ON)));
+            lines.push(("  Arrow keys spawn a random".into(),   Color::WHITE));
+            lines.push(("  car from that direction.".into(),    Color::WHITE));
+            lines.push(("".into(),                              Color::WHITE));
+            lines.push(("  Switch to [M]anual to".into(),       c(C_HUD_DIM)));
+            lines.push(("  choose the turn type.".into(),       c(C_HUD_DIM)));
         }
 
         let box_h = lines.len() as i32 * LINE_H + PAD*2;
@@ -247,9 +239,9 @@ impl<'f,'tc> Renderer<'f,'tc> {
                 if s.crashes>0{c(C_HUD_CRASH)}else{c(C_HUD_VAL)}),
             (format!("Close calls       {}",  s.close_calls/60), c(C_HUD_WARN)),
             (div.into(),                                       Color::WHITE),
-            (format!("Max velocity      {:.1} px/s",s.max_spd),   c(C_HUD_VAL)),
+            (format!("Max velocity      {:.1} px/s",s.max_spd),    c(C_HUD_VAL)),
             (format!("Min velocity      {:.1} px/s",s.min_spd_d()),Color::WHITE),
-            (format!("Avg velocity      {:.1} px/s",s.avg_spd()), Color::WHITE),
+            (format!("Avg velocity      {:.1} px/s",s.avg_spd()),  Color::WHITE),
             (div.into(),                                       Color::WHITE),
             (format!("Max transit       {:.2}s",s.max_time),   c(C_HUD_VAL)),
             (format!("Min transit       {:.2}s",s.min_time_d()),Color::WHITE),
@@ -278,7 +270,7 @@ impl<'f,'tc> Renderer<'f,'tc> {
     }
 }
 
-fn dot_line(canvas: &mut Canvas<Window>, (x0,y0):(f64,f64), (x1,y1):(f64,f64), dot_len:i32, gap_len:i32) {
+fn dot_line(canvas:&mut Canvas<Window>,(x0,y0):(f64,f64),(x1,y1):(f64,f64),dot_len:i32,gap_len:i32){
     let dx=x1-x0; let dy=y1-y0;
     let total=(dx*dx+dy*dy).sqrt();
     if total<1.0{return;}
@@ -299,7 +291,7 @@ fn spt(x:f64,y:f64)->sdl2::rect::Point{sdl2::rect::Point::new(x as i32,y as i32)
 fn col(c:(u8,u8,u8))->Color{Color::RGB(c.0,c.1,c.2)}
 fn c(c:(u8,u8,u8))->Color{Color::RGB(c.0,c.1,c.2)}
 
-fn fill_poly(canvas:&mut Canvas<Window>, pts:&[sdl2::rect::Point]) {
+fn fill_poly(canvas:&mut Canvas<Window>,pts:&[sdl2::rect::Point]){
     if pts.len()<3{return;}
     let y0=pts.iter().map(|p|p.y).min().unwrap();
     let y1=pts.iter().map(|p|p.y).max().unwrap();

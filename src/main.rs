@@ -15,10 +15,6 @@ use renderer::Renderer;
 use stats::Statistics;
 use vehicle::{Arm, Turn, Vehicle};
 
-/// Which arm the player has selected in manual mode (None = not chosen yet)
-#[derive(Clone, Copy, PartialEq, Debug)]
-pub enum SelArm { None, North, South, East, West }
-
 fn main() {
     let sdl    = sdl2::init().expect("SDL2");
     let video  = sdl.video().expect("video");
@@ -33,11 +29,11 @@ fn main() {
     let mut world     = World::new();
     let mut stats     = Statistics::new();
 
-    let mut rng_mode   = false;          // auto random spawn
-    let mut manual     = false;          // manual two-step mode
-    let mut sel_arm    = SelArm::None;   // step-1 selection
-    let mut last_rand  = Instant::now();
-    let mut last_key   = Instant::now(); // global key cooldown for manual
+    let mut rng_mode  = false;
+    let mut manual    = false;
+    let mut sel_arm   = SelArm::None;
+    let mut last_rand = Instant::now();
+    let mut last_key  = Instant::now();
     let frame = Duration::from_secs_f64(1.0 / FPS);
 
     'main: loop {
@@ -48,7 +44,6 @@ fn main() {
                 Event::Quit {..} => break 'main,
                 Event::KeyDown { keycode: Some(k), repeat: false, .. } => match k {
 
-                    // ── Always available ──────────────────────────────────
                     Keycode::Escape => { renderer.show_stats(&stats); break 'main; }
 
                     // [R] = auto/random mode
@@ -65,10 +60,10 @@ fn main() {
                         sel_arm  = SelArm::None;
                     }
 
-                    // ── Arrow keys ────────────────────────────────────────
+                    // Arrow keys
                     Keycode::Up | Keycode::Down | Keycode::Left | Keycode::Right => {
                         if manual {
-                            // Step 1: select the arm, display in HUD
+                            // Step 1: select arm, show in HUD
                             sel_arm = match k {
                                 Keycode::Up    => SelArm::North,
                                 Keycode::Down  => SelArm::South,
@@ -77,8 +72,7 @@ fn main() {
                                 _ => unreachable!(),
                             };
                         } else {
-                            // Auto mode: arrow key = instant random-turn spawn
-                            // with KEY_CD cooldown to avoid flooding
+                            // Auto: instant random-turn spawn with cooldown
                             if last_key.elapsed() >= KEY_CD {
                                 let arm = match k {
                                     Keycode::Up    => Arm::North,
@@ -93,7 +87,7 @@ fn main() {
                         }
                     }
 
-                    // ── Number keys: Step 2 of manual spawn ───────────────
+                    // Number keys: Step 2 of manual spawn
                     Keycode::Num1 | Keycode::Num2 | Keycode::Num3 => {
                         if manual && sel_arm != SelArm::None {
                             if last_key.elapsed() >= KEY_CD {
@@ -112,7 +106,6 @@ fn main() {
                                 };
                                 world.spawn(Vehicle::new(arm, turn));
                                 last_key = Instant::now();
-                                // Keep sel_arm so you can keep adding to same arm
                             }
                         }
                     }
@@ -123,7 +116,6 @@ fn main() {
             }
         }
 
-        // Auto random spawn
         if rng_mode && last_rand.elapsed() >= RAND_CD {
             world.spawn(Vehicle::new_random());
             last_rand = Instant::now();
