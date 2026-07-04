@@ -7,7 +7,7 @@ use sdl2::video::{Window, WindowContext};
 use crate::config::*;
 use crate::intersection::World;
 use crate::stats::Statistics;
-use crate::vehicle::Vehicle;
+use crate::vehicle::{Vehicle, Phase, Spd};
 
 const COLORS: [(u8,u8,u8);8] = [
     (210,50,50),(50,145,220),(50,195,90),(240,175,30),
@@ -38,6 +38,8 @@ impl<'f,'tc> Renderer<'f,'tc> {
         self.canvas.set_draw_color(col(C_GRASS)); self.canvas.clear();
         self.road();
         self.lane_marks();
+        // Draw sensors first (under cars)
+        for v in &world.vehicles { self.sensor_beam(v); }
         for v in &world.vehicles { self.vehicle(v); }
         self.hud(stats, world.vehicles.len(), rng);
         self.canvas.present();
@@ -81,6 +83,37 @@ impl<'f,'tc> Renderer<'f,'tc> {
             self.canvas.fill_rect(Rect::new(x,y-1,(e-x) as u32,2)).ok(); x+=d+g; }
     }
 
+    /// Draw a translucent sensor beam rectangle in front of the vehicle.
+    fn sensor_beam(&mut self, v: &Vehicle) {
+        // Only show beam when approaching or crossing
+        if v.phase == Phase::Exiting { return; }
+        let a = v.angle();
+        let (fx, fy) = (a.cos(), a.sin());
+        // Perpendicular direction
+        let (px, py) = (-fy, fx);
+        let hw = SENSOR_HALF_W as f64;
+        let len = v.sensor_range;
+        // Beam: 4 corners of a rotated rectangle starting at vehicle front
+        let front_x = v.x + fx * (VH / 2.0);
+        let front_y = v.y + fy * (VH / 2.0);
+        let corners = [
+            (front_x - px*hw, front_y - py*hw),
+            (front_x + px*hw, front_y + py*hw),
+            (front_x + fx*len + px*hw, front_y + fy*len + py*hw),
+            (front_x + fx*len - px*hw, front_y + fy*len - py*hw),
+        ];
+        let pts: Vec<sdl2::rect::Point> = corners.iter()
+            .map(|&(x,y)| spt(x,y)).collect();
+        // Color: cyan if fast, yellow if med, red if slow
+        let beam_col = match v.spd {
+            Spd::Fast => Color::RGBA(0, 200, 255, 40),
+            Spd::Med  => Color::RGBA(255, 200, 0, 50),
+            Spd::Slow => Color::RGBA(255, 60, 60, 60),
+        };
+        self.canvas.set_draw_color(beam_col);
+        fill_poly(&mut self.canvas, &pts);
+    }
+
     fn vehicle(&mut self, v: &Vehicle) {
         let (r,g,b) = COLORS[v.color % 8];
         let a = v.angle();
@@ -95,15 +128,22 @@ impl<'f,'tc> Renderer<'f,'tc> {
         let wp: Vec<sdl2::rect::Point> = [
             rot(-hw*wr,fo-ws,a),rot(hw*wr,fo-ws,a),rot(hw*wr,fo,a),rot(-hw*wr,fo,a),
         ].iter().map(|(dx,dy)| spt(v.x+dx,v.y+dy)).collect();
-        self.canvas.set_draw_color(Color::RGB((r as u16*5/10) as u8,(g as u16*5/10) as u8,(b as u16*5/10) as u8));
+        self.canvas.set_draw_color(Color::RGB(
+            (r as u16*5/10) as u8,(g as u16*5/10) as u8,(b as u16*5/10) as u8));
         fill_poly(&mut self.canvas, &wp);
-        // lights
+        // headlights
         self.canvas.set_draw_color(Color::RGB(255,255,180));
         for sx in &[-hw*0.5, hw*0.5] {
             let (dx,dy)=rot(*sx,-hh+3.0,a);
             self.canvas.fill_rect(Rect::new((v.x+dx-3.0) as i32,(v.y+dy-3.0) as i32,6,6)).ok();
         }
-        self.canvas.set_draw_color(Color::RGB(190,20,20));
+        // brake lights — red when slow/med
+        let tl_col = if v.spd == Spd::Slow || v.spd == Spd::Med {
+            Color::RGB(255,20,20)
+        } else {
+            Color::RGB(120,10,10)
+        };
+        self.canvas.set_draw_color(tl_col);
         for sx in &[-hw*0.5, hw*0.5] {
             let (dx,dy)=rot(*sx,hh-3.0,a);
             self.canvas.fill_rect(Rect::new((v.x+dx-3.0) as i32,(v.y+dy-3.0) as i32,6,6)).ok();
@@ -170,7 +210,7 @@ impl<'f,'tc> Renderer<'f,'tc> {
             (div.into(),                                     Color::WHITE),
             ("(closes in 3s)".into(),                       c(C_HUD_DIM)),
         ];
-        for frame in 0..180u32 {
+        for _frame in 0..180u32 {
             self.canvas.set_draw_color(Color::RGB(10,10,25));
             self.canvas.clear();
             let mut y = 70i32;
