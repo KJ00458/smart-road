@@ -46,7 +46,7 @@ fn main() {
 
                     Keycode::Escape => { renderer.show_stats(&stats); break 'main; }
 
-                    // [R] = auto/random mode
+                    // [R] = auto/random continuous mode
                     Keycode::R => {
                         manual   = false;
                         rng_mode = true;
@@ -61,24 +61,26 @@ fn main() {
                     }
 
                     // Arrow keys
+                    // Spec: Up=from South(travels North), Down=from North(travels South),
+                    //       Right=from West(travels East), Left=from East(travels West)
                     Keycode::Up | Keycode::Down | Keycode::Left | Keycode::Right => {
                         if manual {
-                            // Step 1: select arm, show in HUD
+                            // Step 1: select the source arm
                             sel_arm = match k {
-                                Keycode::Up    => SelArm::North,
-                                Keycode::Down  => SelArm::South,
-                                Keycode::Left  => SelArm::West,
-                                Keycode::Right => SelArm::East,
+                                Keycode::Up    => SelArm::South,
+                                Keycode::Down  => SelArm::North,
+                                Keycode::Left  => SelArm::East,
+                                Keycode::Right => SelArm::West,
                                 _ => unreachable!(),
                             };
                         } else {
-                            // Auto: instant random-turn spawn with cooldown
+                            // Auto/idle: instant random-turn spawn with cooldown
                             if last_key.elapsed() >= KEY_CD {
                                 let arm = match k {
-                                    Keycode::Up    => Arm::North,
-                                    Keycode::Down  => Arm::South,
-                                    Keycode::Left  => Arm::West,
-                                    Keycode::Right => Arm::East,
+                                    Keycode::Up    => Arm::South,  // from South, goes North
+                                    Keycode::Down  => Arm::North,  // from North, goes South
+                                    Keycode::Left  => Arm::East,   // from East,  goes West
+                                    Keycode::Right => Arm::West,   // from West,  goes East
                                     _ => unreachable!(),
                                 };
                                 world.spawn(Vehicle::new_from_arm(arm));
